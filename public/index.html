@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>匿名聊天室</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 10px; }
+        #chat { height: 400px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+        .msg { margin-bottom: 5px; }
+        .system { color: #888; font-style: italic; }
+        form { display: flex; }
+        input { flex: 1; padding: 10px; }
+        button { padding: 10px; }
+    </style>
+</head>
+<body>
+    <h2>極簡匿名聊天 (Max 8 IPs)</h2>
+    <div id="chat"></div>
+    <form id="form">
+        <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
+        <button>送出</button>
+    </form>
+
+    <script>
+        const chatDiv = document.getElementById('chat');
+        const evtSource = new EventSource("/events");
+        let myNickname = "我";
+
+        // 接收訊息
+        evtSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const el = document.createElement("div");
+            el.className = "msg " + (data.type === 'system' ? 'system' : '');
+            
+            if(data.type === 'system') {
+                el.innerText = data.text;
+            } else {
+                el.innerText = `${data.user}: ${data.text}`;
+                // 記住自己的暱稱以便辨識 (這裡只是簡單實作)
+                if(data.text.includes(myNickname)) myNickname = data.user; 
+            }
+            chatDiv.appendChild(el);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        };
+
+        evtSource.onerror = function() {
+            chatDiv.innerHTML += '<div class="msg system">連線已中斷或人數已滿。</div>';
+            evtSource.close();
+        };
+
+        // 送出訊息
+        document.getElementById('form').onsubmit = function(e) {
+            e.preventDefault();
+            const input = document.getElementById('msg');
+            if(!input.value) return;
+            
+            fetch('/chat', {
+                method: 'POST',
+                body: JSON.stringify({ message: input.value, nickname: myNickname })
+            });
+            input.value = '';
+        };
+    </script>
+</body>
+</html>
