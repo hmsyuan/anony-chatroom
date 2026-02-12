@@ -1,37 +1,38 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const url = require('url');
 
 const PORT = process.env.PORT || 8080;
 const MAX_IPS = 8;
+const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 分鐘未活動則判定離線
 
-// 儲存連線的使用者 { id, res, ip }
+// 儲存使用者資訊: Map<clientId, { res, ip, nickname, lastSeen, timer }>
 const clients = new Map();
 
-// 取得真實 IP (Cloud Run 會在 header 帶入 x-forwarded-for)
 function getIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) return forwarded.split(',')[0];
   return req.socket.remoteAddress;
 }
 
-// 廣播訊息給所有人
 function broadcast(data) {
+  const json = JSON.stringify(data);
   clients.forEach(client => {
-    client.res.write(`data: ${JSON.stringify(data)}\n\n`);
+    client.res.write(`data: ${json}\n\n`);
   });
 }
 
-// 計算當前不重複 IP 數量
-function getUniqueIpCount() {
-  const ips = new Set();
-  clients.forEach(c => ips.add(c.ip));
-  return ips.size;
+function broadcastUserList() {
+  const userList = Array.from(clients.values()).map(c => c.nickname);
+  broadcast({ type: 'userList', users: userList });
 }
 
 const server = http.createServer((req, res) => {
-  // 1. 提供前端 HTML 頁面
-  if (req.url === '/' || req.url === '/index.html') {
+  const parsedUrl = url.parse(req.url, true);
+
+  // 1. 提供前端頁面
+  if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
     fs.readFile(path.join(__dirname, 'public/index.html'), (err, data) => {
       if (err) {
         res.writeHead(500);
@@ -44,67 +45,84 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. SSE 連線端點 (使用者進入聊天室)
-  if (req.url === '/events') {
+  // 2. SSE 連線
+  if (parsedUrl.pathname === '/events') {
+    const userId = parsedUrl.query.id;
+    const nickname = parsedUrl.query.name || '匿名者';
     const ip = getIp(req);
-    const currentUniqueIps = getUniqueIpCount();
 
-    // 檢查 IP 限制 (如果是新 IP 且已滿 8 人，則拒絕)
-    let isNewIp = true;
-    clients.forEach(c => { if(c.ip === ip) isNewIp = false; });
-
-    if (isNewIp && currentUniqueIps >= MAX_IPS) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: '聊天室已滿 (最多8個不同IP)' }));
+    // 檢查 IP 限制 (排除已連線的同個 ID)
+    const uniqueIps = new Set();
+    clients.forEach(c => uniqueIps.add(c.ip));
+    if (!clients.has(userId) && uniqueIps.size >= MAX_IPS) {
+      res.writeHead(403);
+      res.end('Room full');
       return;
     }
 
-    // 建立 SSE 連線
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive'
     });
 
-    const clientId = Date.now();
-    const nickname = `匿名者${Math.floor(Math.random() * 1000)}`;
-    
-    clients.set(clientId, { res, ip, nickname });
+    // 如果是重連，先清除舊的計時器
+    if (clients.has(userId)) {
+      clearTimeout(clients.get(userId).timer);
+    } else {
+      broadcast({ type: 'system', text: `${nickname} 進入了聊天室。` });
+    }
 
-    // 歡迎訊息
-    broadcast({ type: 'system', text: `${nickname} 加入了聊天室。 (在線: ${clients.size}人)` });
+    const clientData = { res, ip, nickname, lastSeen: Date.now() };
+    clients.set(userId, clientData);
+    broadcastUserList();
 
-    // 當連線中斷 (使用者關閉網頁)
     req.on('close', () => {
-      clients.delete(clientId);
-      broadcast({ type: 'system', text: `${nickname} 離開了聊天室。` });
-      
-      // 如果完全沒人了，你可以選擇讓程式自殺 (Cloud Run 會重啟) 
-      // 或單純讓它閒置直到 Cloud Run 自動縮減資源
-      if (clients.size === 0) {
-        console.log('聊天室清空，記憶體重置。');
-      }
+      // 斷線時不立即移除，等待 5 秒看是否為重整
+      const timer = setTimeout(() => {
+        if (clients.get(userId)?.res === res) {
+          clients.delete(userId);
+          broadcast({ type: 'system', text: `${nickname} 離開了聊天室。` });
+          broadcastUserList();
+        }
+      }, 5000);
+      if (clients.has(userId)) clients.get(userId).timer = timer;
     });
     return;
   }
 
-  // 3. 接收訊息端點
-  if (req.url === '/chat' && req.method === 'POST') {
+  // 3. 接收訊息與心跳
+  if (parsedUrl.pathname === '/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       const data = JSON.parse(body);
-      // 簡單的防護，避免 HTML 注入
-      const safeText = (data.message || '').replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      
-      if(safeText.trim()) {
-        broadcast({ type: 'message', user: data.nickname, text: safeText });
+      const client = clients.get(data.userId);
+      if (client) {
+        client.lastSeen = Date.now(); // 更新最後活動時間
+        const safeText = (data.message || '').replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        if (safeText.trim()) {
+          broadcast({ type: 'message', user: client.nickname, text: safeText, userId: data.userId });
+        }
       }
       res.end('ok');
     });
     return;
   }
 });
+
+// 定期檢查 5 分鐘未活動的使用者
+setInterval(() => {
+  const now = Date.now();
+  clients.forEach((client, userId) => {
+    if (now - client.lastSeen > IDLE_TIMEOUT) {
+      client.res.end();
+      clients.delete(userId);
+      broadcast({ type: 'system', text: `${client.nickname} 因閒置過久被移出。` });
+      broadcastUserList();
+    }
+  });
+}, 30000);
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
