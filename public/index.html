@@ -17,12 +17,22 @@
         form { display: flex; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
+        #toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+        #nickname { max-width: 200px; }
+        #emoji-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        .emoji-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
+        .emoji-btn:hover { background: #f0f0f0; }
         #user-list { font-size: 0.9em; line-height: 1.6; }
     </style>
 </head>
 <body>
     <div id="main">
         <h2>極簡匿名聊天</h2>
+        <div id="toolbar">
+            <input type="text" id="nickname" maxlength="20" placeholder="修改暱稱" />
+            <button type="button" id="rename-btn">更新暱稱</button>
+        </div>
+        <div id="emoji-panel"></div>
         <div id="chat"></div>
         <form id="form">
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
@@ -45,13 +55,31 @@
             localStorage.setItem('chat_nickname', myNickname);
         }
 
+        const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
         const chatDiv = document.getElementById('chat');
         const userListDiv = document.getElementById('user-list');
+        const nicknameInput = document.getElementById('nickname');
+        const msgInput = document.getElementById('msg');
+        const emojiPanel = document.getElementById('emoji-panel');
+        nicknameInput.value = myNickname;
+
+        emojis.forEach(emoji => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'emoji-btn';
+            btn.textContent = emoji;
+            btn.onclick = () => {
+                msgInput.value += emoji;
+                msgInput.focus();
+            };
+            emojiPanel.appendChild(btn);
+        });
+
         const evtSource = new EventSource(`/events?id=${userId}&name=${encodeURIComponent(myNickname)}`);
 
         evtSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            
+
             if (data.type === 'userList') {
                 userListDiv.innerHTML = data.users.map(u => `<div>● ${u}</div>`).join('');
                 return;
@@ -66,7 +94,7 @@
                 el.className = `msg ${isMe ? 'me' : 'other'}`;
                 el.innerHTML = `<div class="user-name">${data.user}</div><div>${data.text}</div>`;
             }
-            
+
             chatDiv.appendChild(el);
             chatDiv.scrollTop = chatDiv.scrollHeight;
         };
@@ -79,17 +107,37 @@
             evtSource.close();
         };
 
+        document.getElementById('rename-btn').onclick = function() {
+            const newName = nicknameInput.value.trim().slice(0, 20);
+            if (!newName || newName === myNickname) return;
+
+            fetch('/nickname', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nickname: newName, userId: userId })
+            }).then(() => {
+                myNickname = newName;
+                localStorage.setItem('chat_nickname', myNickname);
+            });
+        };
+
+        nicknameInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('rename-btn').click();
+            }
+        });
+
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
-            const input = document.getElementById('msg');
-            if(!input.value) return;
-            
+            if(!msgInput.value) return;
+
             fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: input.value, userId: userId })
+                body: JSON.stringify({ message: msgInput.value, userId: userId })
             });
-            input.value = '';
+            msgInput.value = '';
         };
     </script>
 </body>
