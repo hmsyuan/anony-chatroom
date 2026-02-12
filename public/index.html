@@ -5,51 +5,80 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>匿名聊天室</title>
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 10px; }
-        #chat { height: 400px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
-        .msg { margin-bottom: 5px; }
-        .system { color: #888; font-style: italic; }
+        body { font-family: sans-serif; max-width: 800px; margin: 20px auto; padding: 0 10px; display: flex; gap: 20px; }
+        #main { flex: 3; }
+        #sidebar { flex: 1; border-left: 1px solid #ddd; padding-left: 20px; }
+        #chat { height: 450px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin-bottom: 10px; background: #f9f9f9; display: flex; flex-direction: column; }
+        .msg { margin-bottom: 10px; max-width: 80%; padding: 8px 12px; border-radius: 15px; position: relative; }
+        .system { align-self: center; color: #888; font-style: italic; font-size: 0.9em; background: none; }
+        .other { align-self: flex-start; background: #fff; border: 1px solid #ddd; }
+        .me { align-self: flex-end; background: #dcf8c6; text-align: right; }
+        .user-name { font-size: 0.7em; color: #666; margin-bottom: 2px; }
         form { display: flex; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
+        #user-list { font-size: 0.9em; line-height: 1.6; }
     </style>
 </head>
 <body>
-    <h2>極簡匿名聊天 (Max 8 IPs)</h2>
-    <div id="chat"></div>
-    <form id="form">
-        <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
-        <button>送出</button>
-    </form>
+    <div id="main">
+        <h2>極簡匿名聊天</h2>
+        <div id="chat"></div>
+        <form id="form">
+            <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
+            <button>送出</button>
+        </form>
+    </div>
+    <div id="sidebar">
+        <h4>在線名單</h4>
+        <div id="user-list">載入中...</div>
+    </div>
 
     <script>
-        const chatDiv = document.getElementById('chat');
-        const evtSource = new EventSource("/events");
-        let myNickname = "我";
+        // 初始化使用者 ID 與暱稱
+        let userId = localStorage.getItem('chat_userId') || 'u_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('chat_userId', userId);
 
-        // 接收訊息
+        let myNickname = localStorage.getItem('chat_nickname');
+        if (!myNickname) {
+            myNickname = prompt("請輸入您的暱稱:", "匿名者" + Math.floor(Math.random() * 100)) || "匿名者";
+            localStorage.setItem('chat_nickname', myNickname);
+        }
+
+        const chatDiv = document.getElementById('chat');
+        const userListDiv = document.getElementById('user-list');
+        const evtSource = new EventSource(`/events?id=${userId}&name=${encodeURIComponent(myNickname)}`);
+
         evtSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            const el = document.createElement("div");
-            el.className = "msg " + (data.type === 'system' ? 'system' : '');
             
-            if(data.type === 'system') {
+            if (data.type === 'userList') {
+                userListDiv.innerHTML = data.users.map(u => `<div>● ${u}</div>`).join('');
+                return;
+            }
+
+            const el = document.createElement("div");
+            if (data.type === 'system') {
+                el.className = "msg system";
                 el.innerText = data.text;
             } else {
-                el.innerText = `${data.user}: ${data.text}`;
-                // 記住自己的暱稱以便辨識 (這裡只是簡單實作)
-                if(data.text.includes(myNickname)) myNickname = data.user; 
+                const isMe = data.userId === userId;
+                el.className = `msg ${isMe ? 'me' : 'other'}`;
+                el.innerHTML = `<div class="user-name">${data.user}</div><div>${data.text}</div>`;
             }
+            
             chatDiv.appendChild(el);
             chatDiv.scrollTop = chatDiv.scrollHeight;
         };
 
-        evtSource.onerror = function() {
-            chatDiv.innerHTML += '<div class="msg system">連線已中斷或人數已滿。</div>';
+        evtSource.onerror = () => {
+            const el = document.createElement("div");
+            el.className = "msg system";
+            el.innerText = "連線已中斷。";
+            chatDiv.appendChild(el);
             evtSource.close();
         };
 
-        // 送出訊息
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
             const input = document.getElementById('msg');
@@ -57,7 +86,8 @@
             
             fetch('/chat', {
                 method: 'POST',
-                body: JSON.stringify({ message: input.value, nickname: myNickname })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: input.value, userId: userId })
             });
             input.value = '';
         };
