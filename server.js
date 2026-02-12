@@ -28,6 +28,10 @@ function broadcastUserList() {
   broadcast({ type: 'userList', users: userList });
 }
 
+function safeNickname(name) {
+  return (name || '').toString().trim().slice(0, 20) || `匿名者${Math.floor(Math.random() * 1000)}`;
+}
+
 const server = http.createServer((req, res) => {
   const parsedUrl = url.parse(req.url, true);
 
@@ -48,7 +52,7 @@ const server = http.createServer((req, res) => {
   // 2. SSE 連線
   if (parsedUrl.pathname === '/events') {
     const userId = parsedUrl.query.id;
-    const nickname = parsedUrl.query.name || '匿名者';
+    const nickname = safeNickname(parsedUrl.query.name);
     const ip = getIp(req);
 
     // 檢查 IP 限制 (排除已連線的同個 ID)
@@ -81,8 +85,9 @@ const server = http.createServer((req, res) => {
       // 斷線時不立即移除，等待 5 秒看是否為重整
       const timer = setTimeout(() => {
         if (clients.get(userId)?.res === res) {
+          const currentNickname = clients.get(userId)?.nickname || nickname;
           clients.delete(userId);
-          broadcast({ type: 'system', text: `${nickname} 離開了聊天室。` });
+          broadcast({ type: 'system', text: `${currentNickname} 離開了聊天室。` });
           broadcastUserList();
         }
       }, 5000);
@@ -109,6 +114,31 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
+  // 4. 修改暱稱
+  if (parsedUrl.pathname === '/nickname' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      const data = JSON.parse(body || '{}');
+      const client = clients.get(data.userId);
+      if (client) {
+        const newName = safeNickname(data.nickname);
+        const oldName = client.nickname;
+        client.nickname = newName;
+        client.lastSeen = Date.now();
+        if (newName !== oldName) {
+          broadcast({ type: 'system', text: `${oldName} 已改名為 ${newName}。` });
+          broadcastUserList();
+        }
+      }
+      res.end('ok');
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('Not found');
 });
 
 // 定期檢查 5 分鐘未活動的使用者
