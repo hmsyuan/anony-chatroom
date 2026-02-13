@@ -5,26 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>匿名聊天室</title>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 20px auto; padding: 0 10px; display: flex; gap: 20px; }
+        body { font-family: sans-serif; max-width: 920px; margin: 20px auto; padding: 0 10px; display: flex; gap: 20px; }
         #main { flex: 3; }
         #sidebar { flex: 1; border-left: 1px solid #ddd; padding-left: 20px; }
         #chat { height: 450px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin-bottom: 10px; background: #f9f9f9; display: flex; flex-direction: column; }
-        .msg { margin-bottom: 10px; max-width: 80%; padding: 8px 12px; border-radius: 15px; position: relative; }
-        .system { align-self: center; color: #888; font-style: italic; font-size: 0.9em; background: none; }
+        .msg { margin-bottom: 10px; max-width: 82%; padding: 8px 12px; border-radius: 15px; position: relative; }
+        .system { align-self: center; color: #888; font-style: italic; font-size: 0.9em; background: none; text-align: center; }
         .other { align-self: flex-start; background: #fff; border: 1px solid #ddd; }
         .me { align-self: flex-end; background: #dcf8c6; text-align: right; }
         .user-name { font-size: 0.7em; color: #666; margin-bottom: 2px; }
-        form { display: flex; margin-bottom: 8px; }
+        .time-label { font-size: 0.68em; color: #777; margin-top: 4px; }
+        form { display: flex; margin-bottom: 8px; gap: 8px; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
         #toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
         #nickname { max-width: 200px; }
-        #room-key { max-width: 220px; }
-        #emoji-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-        .emoji-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
-        .emoji-btn:hover { background: #f0f0f0; }
+        #room-key { max-width: 260px; }
+        #emoji-panel, #gif-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        .emoji-btn, .gif-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
+        .emoji-btn:hover, .gif-btn:hover { background: #f0f0f0; }
+        .gif-btn { width: 72px; height: 72px; padding: 0; overflow: hidden; }
+        .gif-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .msg-gif { max-width: 220px; border-radius: 10px; margin-top: 4px; }
         #user-list { font-size: 0.9em; line-height: 1.6; }
         .hint { color: #666; font-size: 0.82em; margin-bottom: 8px; }
+        .security-panel { margin-bottom: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: #fcfcfc; }
+        .security-title { margin: 0 0 4px; font-size: 0.95em; font-weight: 700; }
+        .security-state { font-size: 0.85em; margin-bottom: 4px; }
+        .security-state.warn { color: #b56a00; }
+        .security-state.safe { color: #267a2f; }
+        .security-note { color: #555; font-size: 0.8em; line-height: 1.5; }
     </style>
 </head>
 <body>
@@ -43,32 +53,66 @@
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
             <button>送出</button>
         </form>
+        <div class="hint">Emoji</div>
         <div id="emoji-panel"></div>
+        <div class="hint">GIF 快選（免費來源）</div>
+        <div id="gif-panel"></div>
     </div>
     <div id="sidebar">
+        <div class="security-panel">
+            <p class="security-title">網路監控可見性</p>
+            <div id="security-state" class="security-state"></div>
+            <div id="security-note" class="security-note"></div>
+        </div>
         <h4>在線名單</h4>
         <div id="user-list">載入中...</div>
     </div>
 
     <script>
-        // 初始化使用者 ID 與暱稱
         let userId = localStorage.getItem('chat_userId') || 'u_' + Math.random().toString(36).substr(2, 9);
         localStorage.setItem('chat_userId', userId);
 
         let myNickname = localStorage.getItem('chat_nickname');
         if (!myNickname) {
-            myNickname = prompt("請輸入您的暱稱:", "匿名者" + Math.floor(Math.random() * 100)) || "匿名者";
+            myNickname = prompt('請輸入您的暱稱:', '匿名者' + Math.floor(Math.random() * 100)) || '匿名者';
             localStorage.setItem('chat_nickname', myNickname);
         }
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
+        const gifOptions = [
+            { name: 'Hi', url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbWV5eTFob2MwdjM2dDRzNnM5N2tlN3V3N3M2Y2cxczVrN3l4M2s5NCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif' },
+            { name: 'Cat', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
+            { name: 'Wow', url: 'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif' },
+            { name: 'Clap', url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif' },
+            { name: 'Party', url: 'https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif' }
+        ];
+
         const chatDiv = document.getElementById('chat');
         const userListDiv = document.getElementById('user-list');
         const nicknameInput = document.getElementById('nickname');
         const msgInput = document.getElementById('msg');
         const roomKeyInput = document.getElementById('room-key');
         const emojiPanel = document.getElementById('emoji-panel');
+        const gifPanel = document.getElementById('gif-panel');
+        const securityState = document.getElementById('security-state');
+        const securityNote = document.getElementById('security-note');
         nicknameInput.value = myNickname;
+
+        const timeFormatter = new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+
+        function formatLocalTime(iso) {
+            if (!iso) return '';
+            const dt = new Date(iso);
+            if (Number.isNaN(dt.getTime())) return '';
+            return timeFormatter.format(dt);
+        }
 
         function xorCrypt(text, key) {
             let out = '';
@@ -95,8 +139,34 @@
             }
         }
 
+        function updateSecurityStatus() {
+            const hasKey = Boolean(roomKeyInput.value);
+            const isHttps = window.location.protocol === 'https:';
+
+            if (isHttps && hasKey) {
+                securityState.className = 'security-state safe';
+                securityState.textContent = '目前風險較低：傳輸層 + 應用層皆有保護。';
+                securityNote.textContent = '若單位有網管監看流量，通常只能看到你連到本站、流量大小與時間；看不到聊天明文內容。';
+                return;
+            }
+
+            securityState.className = 'security-state warn';
+            if (!isHttps && !hasKey) {
+                securityState.textContent = '高風險：未使用 HTTPS，且未啟用密語。';
+                securityNote.textContent = '網管可能直接看到訊息內容（明文）。建議改用 HTTPS，並輸入聊天室密語。';
+            } else if (!isHttps) {
+                securityState.textContent = '中高風險：已使用密語，但連線不是 HTTPS。';
+                securityNote.textContent = '網管較難直接讀懂內容，但仍可攔截資料並觀察大量中繼資訊。建議優先改用 HTTPS。';
+            } else {
+                securityState.textContent = '中風險：HTTPS 已啟用，但目前未使用密語。';
+                securityNote.textContent = '網管通常看不到訊息內容，但服務端仍可看見明文；若要額外防護可啟用密語。';
+            }
+        }
+
         function renderMessage(data) {
             const el = document.createElement('div');
+            const timeText = formatLocalTime(data.createdAt);
+
             if (data.type === 'system') {
                 el.className = 'msg system';
                 el.innerText = data.text;
@@ -107,12 +177,27 @@
                 const nameEl = document.createElement('div');
                 nameEl.className = 'user-name';
                 nameEl.innerText = data.user;
-
-                const contentEl = document.createElement('div');
-                contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
-
                 el.appendChild(nameEl);
-                el.appendChild(contentEl);
+
+                if (data.messageType === 'gif' && data.gifUrl) {
+                    const gifEl = document.createElement('img');
+                    gifEl.src = data.gifUrl;
+                    gifEl.alt = 'GIF';
+                    gifEl.className = 'msg-gif';
+                    gifEl.loading = 'lazy';
+                    el.appendChild(gifEl);
+                } else {
+                    const contentEl = document.createElement('div');
+                    contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
+                    el.appendChild(contentEl);
+                }
+            }
+
+            if (timeText) {
+                const timeEl = document.createElement('div');
+                timeEl.className = 'time-label';
+                timeEl.innerText = timeText;
+                el.appendChild(timeEl);
             }
 
             chatDiv.appendChild(el);
@@ -148,6 +233,23 @@
             emojiPanel.appendChild(btn);
         });
 
+        gifOptions.forEach(item => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'gif-btn';
+            btn.title = `傳送 GIF: ${item.name}`;
+            btn.innerHTML = `<img src="${item.url}" alt="${item.name}" loading="lazy" />`;
+            btn.onclick = () => {
+                fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
+                });
+                heartbeatOnActivity();
+            };
+            gifPanel.appendChild(btn);
+        });
+
         const evtSource = new EventSource(`/events?id=${userId}&name=${encodeURIComponent(myNickname)}`);
 
         evtSource.onmessage = function(event) {
@@ -162,7 +264,7 @@
         };
 
         evtSource.onerror = () => {
-            renderMessage({ type: 'system', text: '連線已中斷。' });
+            renderMessage({ type: 'system', text: '連線已中斷。', createdAt: new Date().toISOString() });
             evtSource.close();
         };
 
@@ -187,6 +289,8 @@
             }
         });
 
+        roomKeyInput.addEventListener('input', updateSecurityStatus);
+
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
             if (!msgInput.value) return;
@@ -197,7 +301,7 @@
             fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: payload.text, encrypted: payload.encrypted, userId: userId })
+                body: JSON.stringify({ message: payload.text, encrypted: payload.encrypted, messageType: 'text', userId: userId })
             });
             msgInput.value = '';
             heartbeatOnActivity();
@@ -207,8 +311,8 @@
             document.addEventListener(eventName, heartbeatOnActivity, { passive: true });
         });
         setInterval(sendHeartbeat, 60000);
+        updateSecurityStatus();
         sendHeartbeat();
     </script>
 </body>
 </html>
-```
