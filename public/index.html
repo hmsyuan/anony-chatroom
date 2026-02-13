@@ -86,22 +86,9 @@
         }
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
+        const giphyApiKey = 'dc6zaTOxFJmzC';
         const gifPageSize = 8;
         let currentGifKeyword = '';
-        const gifLibrary = [
-            { name: 'Hi', tags: ['hi', 'hello', 'wave'], url: 'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif' },
-            { name: 'Cat', tags: ['cat', 'pet', 'cute'], url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
-            { name: 'Wow', tags: ['wow', 'surprised', 'shock'], url: 'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif' },
-            { name: 'Clap', tags: ['clap', 'applause', 'good'], url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif' },
-            { name: 'Party', tags: ['party', 'celebrate', 'happy'], url: 'https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif' },
-            { name: 'Laugh', tags: ['laugh', 'funny', 'lol'], url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
-            { name: 'Cry', tags: ['cry', 'sad', 'tears'], url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
-            { name: 'Thumbs Up', tags: ['ok', 'thumbs', 'like'], url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
-            { name: 'Dance', tags: ['dance', 'party', 'move'], url: 'https://media.giphy.com/media/l0MYC0LajbaPoEADu/giphy.gif' },
-            { name: 'Mind Blown', tags: ['wow', 'mind', 'blown'], url: 'https://media.giphy.com/media/xT0xeJpnrWC4XWblEk/giphy.gif' },
-            { name: 'Thanks', tags: ['thanks', 'thank you', 'appreciate'], url: 'https://media.giphy.com/media/3oEdva9BUHPIs2SkGk/giphy.gif' },
-            { name: 'Nope', tags: ['no', 'nope', 'reject'], url: 'https://media.giphy.com/media/3og0IPxMM0erATueVW/giphy.gif' }
-        ];
 
         const chatDiv = document.getElementById('chat');
         const userListDiv = document.getElementById('user-list');
@@ -293,25 +280,38 @@
             });
         }
 
-        function shuffle(items) {
-            const arr = [...items];
-            for (let i = arr.length - 1; i > 0; i -= 1) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [arr[i], arr[j]] = [arr[j], arr[i]];
-            }
-            return arr;
-        }
-
-        function loadGifs(keyword = '', refresh = false) {
-            const query = keyword.trim().toLowerCase();
+        async function loadGifs(keyword = '', refresh = false) {
+            const query = keyword.trim();
             currentGifKeyword = query;
 
-            const matched = query
-                ? gifLibrary.filter(item => item.name.toLowerCase().includes(query) || item.tags.some(tag => tag.includes(query)))
-                : gifLibrary;
+            const endpoint = query ? 'search' : 'trending';
+            const offset = refresh ? Math.floor(Math.random() * 40) : 0;
+            const params = new URLSearchParams({
+                api_key: giphyApiKey,
+                limit: gifPageSize.toString(),
+                rating: 'g',
+                offset: offset.toString()
+            });
 
-            const items = (refresh ? shuffle(matched) : matched).slice(0, gifPageSize);
-            renderGifOptions(items);
+            if (query) params.set('q', query);
+
+            gifSearchBtn.disabled = true;
+            gifRefreshBtn.disabled = true;
+
+            try {
+                const resp = await fetch(`https://api.giphy.com/v1/gifs/${endpoint}?${params.toString()}`);
+                const body = await resp.json();
+                const items = (body.data || []).map(gif => ({
+                    name: gif.title || query || 'GIF',
+                    url: gif.images?.fixed_height_small?.url || gif.images?.downsized_medium?.url
+                })).filter(item => item.url);
+                renderGifOptions(items);
+            } catch {
+                gifPanel.innerHTML = '<div class="hint">GIF 載入失敗，請稍後再試。</div>';
+            } finally {
+                gifSearchBtn.disabled = false;
+                gifRefreshBtn.disabled = false;
+            }
         }
 
         gifSearchBtn.addEventListener('click', () => loadGifs(gifSearchInput.value));
