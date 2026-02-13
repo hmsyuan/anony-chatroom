@@ -73,6 +73,7 @@ const server = http.createServer((req, res) => {
     // 如果是重連，先清除舊的計時器
     if (clients.has(userId)) {
       clearTimeout(clients.get(userId).timer);
+      clients.get(userId).lastSeen = Date.now();
     } else {
       broadcast({ type: 'system', text: `${nickname} 進入了聊天室。` });
     }
@@ -96,18 +97,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. 接收訊息與心跳
+  // 3. 接收訊息
   if (parsedUrl.pathname === '/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
-      const data = JSON.parse(body);
+      const data = JSON.parse(body || '{}');
       const client = clients.get(data.userId);
       if (client) {
         client.lastSeen = Date.now(); // 更新最後活動時間
-        const safeText = (data.message || '').replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        if (safeText.trim()) {
-          broadcast({ type: 'message', user: client.nickname, text: safeText, userId: data.userId });
+        const text = (data.message || '').toString();
+        if (text.trim()) {
+          broadcast({
+            type: 'message',
+            user: client.nickname,
+            text,
+            userId: data.userId,
+            encrypted: Boolean(data.encrypted)
+          });
         }
       }
       res.end('ok');
@@ -131,6 +138,21 @@ const server = http.createServer((req, res) => {
           broadcast({ type: 'system', text: `${oldName} 已改名為 ${newName}。` });
           broadcastUserList();
         }
+      }
+      res.end('ok');
+    });
+    return;
+  }
+
+  // 5. 心跳（避免活躍使用者被閒置機制誤踢）
+  if (parsedUrl.pathname === '/heartbeat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      const data = JSON.parse(body || '{}');
+      const client = clients.get(data.userId);
+      if (client) {
+        client.lastSeen = Date.now();
       }
       res.end('ok');
     });
