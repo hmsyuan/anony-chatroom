@@ -12,7 +12,6 @@ const clients = new Map();
 const messages = [];
 let nextMessageId = 1;
 const MAX_MESSAGE_HISTORY = 200;
-const MAX_ATTACHMENT_DATA_URL_LENGTH = 3 * 1024 * 1024;
 
 function getIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -38,20 +37,6 @@ function broadcastUserList() {
 
 function safeNickname(name) {
   return (name || '').toString().trim().slice(0, 20) || `匿名者${Math.floor(Math.random() * 1000)}`;
-}
-
-function sanitizeAttachment(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-
-  const name = (raw.name || '').toString().slice(0, 120);
-  const type = (raw.type || '').toString().slice(0, 120);
-  const dataUrl = (raw.dataUrl || '').toString();
-  const size = Number(raw.size) || 0;
-
-  const isDataUrl = /^data:[^;]+;base64,/i.test(dataUrl);
-  if (!isDataUrl || dataUrl.length > MAX_ATTACHMENT_DATA_URL_LENGTH) return null;
-
-  return { name, type, dataUrl, size };
 }
 
 const server = http.createServer((req, res) => {
@@ -132,12 +117,10 @@ const server = http.createServer((req, res) => {
         const messageType = data.messageType === 'gif' ? 'gif' : 'text';
         const gifUrl = (data.gifUrl || '').toString().trim();
 
-        const attachment = sanitizeAttachment(data.attachment);
         const isValidGifUrl = messageType === 'gif' && /^https:\/\/.+/i.test(gifUrl);
         const hasValidText = messageType === 'text' && text.trim();
-        const hasAttachment = messageType === 'text' && Boolean(attachment);
 
-        if (hasValidText || isValidGifUrl || hasAttachment) {
+        if (hasValidText || isValidGifUrl) {
           const messageId = `m_${nextMessageId++}`;
           messages.push({ id: messageId, senderId: data.userId, readers: new Set() });
           if (messages.length > MAX_MESSAGE_HISTORY) messages.shift();
@@ -151,7 +134,6 @@ const server = http.createServer((req, res) => {
             messageType,
             userId: data.userId,
             encrypted: messageType === 'text' ? Boolean(data.encrypted) : false,
-            attachment: messageType === 'text' ? attachment : null,
             createdAt: new Date().toISOString()
           });
         }
