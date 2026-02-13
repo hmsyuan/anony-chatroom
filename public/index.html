@@ -125,6 +125,7 @@
             { name: 'Good Job', url: 'https://media.giphy.com/media/13HgwGsXF0aiGY/giphy.gif', keywords: ['good job', 'great', '厲害'] },
             { name: 'Oops', url: 'https://media.giphy.com/media/14uQ3cOFteDaU/giphy.gif', keywords: ['oops', '失誤'] },
             { name: 'Sleepy', url: 'https://media.giphy.com/media/3o6ZsY8Y0qQ8YrwzY4/giphy.gif', keywords: ['sleep', '睏'] }
+            { name: 'Love', url: 'https://media.giphy.com/media/26FLdmIp6wJr91JAI/giphy.gif', keywords: ['love', 'heart', '愛'] }
         ];
         const MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024;
 
@@ -298,6 +299,7 @@
                 pdfEl.title = attachment.name || 'PDF';
                 container.appendChild(pdfEl);
             } else if (type.startsWith('image/')) {
+            if (type.startsWith('image/')) {
                 const imgEl = document.createElement('img');
                 imgEl.src = attachment.dataUrl;
                 imgEl.alt = attachment.name || '上傳圖片';
@@ -488,6 +490,8 @@
                 });
 
                 renderGifOptions(merged.slice(0, Math.max(gifPageSize, 12)));
+                const items = refresh ? randomPick(matched, gifPageSize) : matched.slice(0, gifPageSize);
+                renderGifOptions(items);
             } catch {
                 gifPanel.innerHTML = '<div class="hint">GIF 載入失敗，請稍後再試。</div>';
             } finally {
