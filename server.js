@@ -5,10 +5,13 @@ const url = require('url');
 
 const PORT = process.env.PORT || 8080;
 const MAX_IPS = 8;
-const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 分鐘未活動則判定離線
+const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 分鐘未活動則判定離線
 
 // 儲存使用者資訊: Map<clientId, { res, ip, nickname, lastSeen, timer }>
 const clients = new Map();
+const messages = [];
+let nextMessageId = 1;
+const MAX_MESSAGE_HISTORY = 200;
 
 function getIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -118,8 +121,13 @@ const server = http.createServer((req, res) => {
         const hasValidText = messageType === 'text' && text.trim();
 
         if (hasValidText || isValidGifUrl) {
+          const messageId = `m_${nextMessageId++}`;
+          messages.push({ id: messageId, senderId: data.userId, readers: new Set() });
+          if (messages.length > MAX_MESSAGE_HISTORY) messages.shift();
+
           broadcast({
             type: 'message',
+            messageId,
             user: client.nickname,
             text,
             gifUrl: isValidGifUrl ? gifUrl : '',
@@ -157,7 +165,26 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. 心跳（避免活躍使用者被閒置機制誤踢）
+  // 5. 已讀回報
+  if (parsedUrl.pathname === '/read' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      const data = JSON.parse(body || '{}');
+      const client = clients.get(data.userId);
+      const message = messages.find(item => item.id === data.messageId);
+
+      if (client && message && message.senderId !== data.userId) {
+        message.readers.add(data.userId);
+        broadcast({ type: 'readReceipt', messageId: message.id, readCount: message.readers.size });
+      }
+
+      res.end('ok');
+    });
+    return;
+  }
+
+  // 6. 心跳（避免活躍使用者被閒置機制誤踢）
   if (parsedUrl.pathname === '/heartbeat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -176,7 +203,7 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
-// 定期檢查 5 分鐘未活動的使用者
+// 定期檢查 30 分鐘未活動的使用者
 setInterval(() => {
   const now = Date.now();
   clients.forEach((client, userId) => {

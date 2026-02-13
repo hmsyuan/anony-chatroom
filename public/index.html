@@ -103,6 +103,8 @@
         const securityState = document.getElementById('security-state');
         const securityNote = document.getElementById('security-note');
         nicknameInput.value = myNickname;
+        const myMessageElements = new Map();
+        const readSent = new Set();
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, {
             hour: '2-digit',
@@ -196,12 +198,26 @@
                     contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
                     el.appendChild(contentEl);
                 }
+
+                if (data.messageId && !isMe && !readSent.has(data.messageId)) {
+                    readSent.add(data.messageId);
+                    fetch('/read', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, messageId: data.messageId })
+                    });
+                }
             }
 
             if (timeText) {
                 const timeEl = document.createElement('div');
                 timeEl.className = 'time-label';
                 timeEl.innerText = timeText;
+                if (data.userId === userId && data.type !== 'system') {
+                    if (data.messageId) myMessageElements.set(data.messageId, timeEl);
+                    timeEl.dataset.readCount = '0';
+                    timeEl.innerText = `${timeText} · 已讀 0`;
+                }
                 el.appendChild(timeEl);
             }
 
@@ -314,6 +330,16 @@
 
             if (data.type === 'userList') {
                 userListDiv.innerHTML = data.users.map(u => `<div>● ${u}</div>`).join('');
+                return;
+            }
+
+            if (data.type === 'readReceipt') {
+                const timeEl = myMessageElements.get(data.messageId);
+                if (timeEl) {
+                    const timeText = timeEl.innerText.split(' · ')[0];
+                    timeEl.dataset.readCount = String(data.readCount || 0);
+                    timeEl.innerText = `${timeText} · 已讀 ${data.readCount || 0}`;
+                }
                 return;
             }
 
