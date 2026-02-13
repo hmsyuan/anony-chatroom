@@ -1,18 +1,45 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
 
 const PORT = process.env.PORT || 8080;
 const MAX_IPS = 8;
-const IDLE_TIMEOUT = 30 * 60 * 1000; // 30 分鐘未活動則判定離線
+const IDLE_TIMEOUT = 30 * 60 * 1000;
 
-// 儲存使用者資訊: Map<clientId, { res, ip, nickname, lastSeen, timer }>
 const clients = new Map();
 const messages = [];
 let nextMessageId = 1;
 const MAX_MESSAGE_HISTORY = 200;
 const MAX_ATTACHMENT_DATA_URL_LENGTH = 3 * 1024 * 1024;
+
+const builtInGifPools = {
+  cats: [
+    { name: 'Cat typing', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
+    { name: 'Cat hi', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
+    { name: 'Happy cat', url: 'https://media.giphy.com/media/v6aOjy0Qo1fIA/giphy.gif' },
+    { name: 'Cat wow', url: 'https://media.giphy.com/media/ICOgUNjpvO0PC/giphy.gif' }
+  ],
+  memes: [
+    { name: 'Mind blown', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+    { name: 'Thumbs up', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+    { name: 'Nice', url: 'https://media.giphy.com/media/yJFeycRK2DB4c/giphy.gif' },
+    { name: 'Oh no', url: 'https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif' }
+  ],
+  reactions: [
+    { name: 'Clap', url: 'https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif' },
+    { name: 'LOL', url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
+    { name: 'Facepalm', url: 'https://media.giphy.com/media/TJawtKM6OCKkvwCIqX/giphy.gif' },
+    { name: 'Party', url: 'https://media.giphy.com/media/MeIucAjPKoA120R7sN/giphy.gif' }
+  ],
+  anime: [
+    { name: 'Anime wow', url: 'https://media.giphy.com/media/13borq7Zo2kulO/giphy.gif' },
+    { name: 'Nod', url: 'https://media.giphy.com/media/KzJkzjggfGN5Py6nkT/giphy.gif' },
+    { name: 'Wave', url: 'https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif' },
+    { name: 'Excited', url: 'https://media.giphy.com/media/1yldusVtwRA9r9EUan/giphy.gif' }
+  ]
+};
 
 function getIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
@@ -40,6 +67,14 @@ function safeNickname(name) {
   return (name || '').toString().trim().slice(0, 20) || `匿名者${Math.floor(Math.random() * 1000)}`;
 }
 
+function safeJsonParse(raw) {
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return {};
+  }
+}
+
 function sanitizeAttachment(raw) {
   if (!raw || typeof raw !== 'object') return null;
 
@@ -54,10 +89,39 @@ function sanitizeAttachment(raw) {
   return { name, type, dataUrl, size };
 }
 
-const server = http.createServer((req, res) => {
+function readBody(req, cb) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => cb(safeJsonParse(body)));
+}
+
+function pickBuiltInGifs(refreshSeed = 0, limit = 8) {
+  const pools = Object.values(builtInGifPools);
+  const flat = pools.flat();
+  const start = Math.abs(Number(refreshSeed) || 0) % flat.length;
+  const rotated = [...flat.slice(start), ...flat.slice(0, start)];
+  return rotated.slice(0, limit);
+}
+
+function fetchJson(targetUrl) {
+  return new Promise((resolve, reject) => {
+    https.get(targetUrl, (resp) => {
+      let data = '';
+      resp.on('data', chunk => data += chunk);
+      resp.on('end', () => {
+        try {
+          resolve(JSON.parse(data || '{}'));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
 
-  // 1. 提供前端頁面
   if (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html') {
     fs.readFile(path.join(__dirname, 'public/index.html'), (err, data) => {
       if (err) {
@@ -71,13 +135,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. SSE 連線
   if (parsedUrl.pathname === '/events') {
     const userId = parsedUrl.query.id;
     const nickname = safeNickname(parsedUrl.query.name);
     const ip = getIp(req);
 
-    // 檢查 IP 限制 (排除已連線的同個 ID)
     const uniqueIps = new Set();
     clients.forEach(c => uniqueIps.add(c.ip));
     if (!clients.has(userId) && uniqueIps.size >= MAX_IPS) {
@@ -92,7 +154,6 @@ const server = http.createServer((req, res) => {
       'Connection': 'keep-alive'
     });
 
-    // 如果是重連，先清除舊的計時器
     if (clients.has(userId)) {
       clearTimeout(clients.get(userId).timer);
       clients.get(userId).lastSeen = Date.now();
@@ -105,7 +166,6 @@ const server = http.createServer((req, res) => {
     broadcastUserList();
 
     req.on('close', () => {
-      // 斷線時不立即移除，等待 5 秒看是否為重整
       const timer = setTimeout(() => {
         if (clients.get(userId)?.res === res) {
           const currentNickname = clients.get(userId)?.nickname || nickname;
@@ -119,15 +179,42 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. 接收訊息
+  if (parsedUrl.pathname === '/gifs' && req.method === 'GET') {
+    const q = (parsedUrl.query.q || '').toString().trim();
+    const refresh = (parsedUrl.query.refresh || '0').toString();
+    const limit = 8;
+    const apiKey = process.env.GIPHY_API_KEY || 'dc6zaTOxFJmzC';
+
+    if (!q) {
+      const local = pickBuiltInGifs(refresh, limit);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ source: 'builtin', items: local }));
+      return;
+    }
+
+    try {
+      const offset = Math.abs(Number(refresh) || 0) % 60;
+      const target = `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(q)}&limit=${limit}&rating=g&offset=${offset}`;
+      const body = await fetchJson(target);
+      const items = (body.data || []).map(gif => ({
+        name: gif.title || q || 'GIF',
+        url: gif.images?.fixed_height_small?.url || gif.images?.downsized_medium?.url
+      })).filter(item => item.url);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ source: 'giphy', items }));
+    } catch {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ source: 'builtin_fallback', items: pickBuiltInGifs(refresh, limit) }));
+    }
+    return;
+  }
+
   if (parsedUrl.pathname === '/chat' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      const data = JSON.parse(body || '{}');
+    readBody(req, data => {
       const client = clients.get(data.userId);
       if (client) {
-        client.lastSeen = Date.now(); // 更新最後活動時間
+        client.lastSeen = Date.now();
         const text = (data.message || '').toString();
         const messageType = data.messageType === 'gif' ? 'gif' : 'text';
         const gifUrl = (data.gifUrl || '').toString().trim();
@@ -139,7 +226,7 @@ const server = http.createServer((req, res) => {
 
         if (hasValidText || isValidGifUrl || hasAttachment) {
           const messageId = `m_${nextMessageId++}`;
-          messages.push({ id: messageId, senderId: data.userId, readers: new Set() });
+          messages.push({ id: messageId, senderId: data.userId, readers: new Set(), deleted: false });
           if (messages.length > MAX_MESSAGE_HISTORY) messages.shift();
 
           broadcast({
@@ -161,12 +248,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 4. 修改暱稱
+  if (parsedUrl.pathname === '/message/delete' && req.method === 'POST') {
+    readBody(req, data => {
+      const client = clients.get(data.userId);
+      const message = messages.find(item => item.id === data.messageId);
+
+      if (client && message && message.senderId === data.userId && !message.deleted) {
+        message.deleted = true;
+        broadcast({ type: 'messageDeleted', messageId: message.id, by: client.nickname, createdAt: new Date().toISOString() });
+      }
+
+      res.end('ok');
+    });
+    return;
+  }
+
   if (parsedUrl.pathname === '/nickname' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      const data = JSON.parse(body || '{}');
+    readBody(req, data => {
       const client = clients.get(data.userId);
       if (client) {
         const newName = safeNickname(data.nickname);
@@ -183,16 +281,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. 已讀回報
   if (parsedUrl.pathname === '/read' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      const data = JSON.parse(body || '{}');
+    readBody(req, data => {
       const client = clients.get(data.userId);
       const message = messages.find(item => item.id === data.messageId);
 
-      if (client && message && message.senderId !== data.userId) {
+      if (client && message && !message.deleted && message.senderId !== data.userId) {
         message.readers.add(data.userId);
         broadcast({ type: 'readReceipt', messageId: message.id, readCount: message.readers.size });
       }
@@ -202,16 +296,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. 心跳（避免活躍使用者被閒置機制誤踢）
   if (parsedUrl.pathname === '/heartbeat' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      const data = JSON.parse(body || '{}');
+    readBody(req, data => {
       const client = clients.get(data.userId);
-      if (client) {
-        client.lastSeen = Date.now();
-      }
+      if (client) client.lastSeen = Date.now();
       res.end('ok');
     });
     return;
@@ -221,7 +309,6 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
-// 定期檢查 30 分鐘未活動的使用者
 setInterval(() => {
   const now = Date.now();
   clients.forEach((client, userId) => {
