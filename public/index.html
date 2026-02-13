@@ -31,6 +31,7 @@
         .msg-gif, .msg-image { max-width: 220px; border-radius: 10px; margin-top: 4px; }
         .msg-file { margin-top: 6px; font-size: 0.88em; }
         .msg-video { max-width: 280px; margin-top: 4px; border-radius: 8px; }
+        .msg-pdf { width: 100%; max-width: 360px; height: 320px; margin-top: 6px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
         .pending-preview { margin-bottom: 8px; padding: 8px; border: 1px dashed #bbb; border-radius: 8px; background: #fff; }
         .pending-preview.hidden { display: none; }
         .pending-preview-title { font-size: 0.8em; color: #666; margin-bottom: 6px; }
@@ -97,6 +98,7 @@
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
         const gifPageSize = 8;
+        const giphyApiKey = 'dc6zaTOxFJmzC';
         let currentGifKeyword = '';
         const gifCatalog = [
             { name: 'Happy Cat', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif', keywords: ['happy', 'cat', '開心'] },
@@ -110,6 +112,19 @@
             { name: 'Nope', url: 'https://media.giphy.com/media/3o7TKwmnDgQb5jemjK/giphy.gif', keywords: ['no', 'nope', '不要'] },
             { name: 'Clap', url: 'https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif', keywords: ['clap', 'good', '棒'] },
             { name: 'Angry', url: 'https://media.giphy.com/media/l4FGuhL4U2WyjdkaY/giphy.gif', keywords: ['angry', 'mad', '生氣'] },
+            { name: 'Love', url: 'https://media.giphy.com/media/26FLdmIp6wJr91JAI/giphy.gif', keywords: ['love', 'heart', '愛'] },
+            { name: 'Dance', url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif', keywords: ['dance', '跳舞'] },
+            { name: 'Confetti', url: 'https://media.giphy.com/media/xT0xeJpnrWC4XWblEk/giphy.gif', keywords: ['confetti', 'party', '慶祝'] },
+            { name: 'Wow', url: 'https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif', keywords: ['wow', '驚訝'] },
+            { name: 'Mind Blown', url: 'https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif', keywords: ['mind blown', '震驚'] },
+            { name: 'Handshake', url: 'https://media.giphy.com/media/l1ug5sWBCJOOGzN84/giphy.gif', keywords: ['deal', 'handshake', '成交'] },
+            { name: 'Facepalm', url: 'https://media.giphy.com/media/TJawtKM6OCKkvwCIqX/giphy.gif', keywords: ['facepalm', '無言'] },
+            { name: 'Typing', url: 'https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif', keywords: ['typing', '打字'] },
+            { name: 'Coffee', url: 'https://media.giphy.com/media/3oriO04qxVReM5rJEA/giphy.gif', keywords: ['coffee', '早安'] },
+            { name: 'Welcome', url: 'https://media.giphy.com/media/l0MYGb1LuZ3n7dRnO/giphy.gif', keywords: ['welcome', '歡迎'] },
+            { name: 'Good Job', url: 'https://media.giphy.com/media/13HgwGsXF0aiGY/giphy.gif', keywords: ['good job', 'great', '厲害'] },
+            { name: 'Oops', url: 'https://media.giphy.com/media/14uQ3cOFteDaU/giphy.gif', keywords: ['oops', '失誤'] },
+            { name: 'Sleepy', url: 'https://media.giphy.com/media/3o6ZsY8Y0qQ8YrwzY4/giphy.gif', keywords: ['sleep', '睏'] }
             { name: 'Love', url: 'https://media.giphy.com/media/26FLdmIp6wJr91JAI/giphy.gif', keywords: ['love', 'heart', '愛'] }
         ];
         const MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024;
@@ -132,6 +147,8 @@
         const myMessageElements = new Map();
         const readSent = new Set();
         let pendingAttachment = null;
+        const defaultTitle = document.title;
+        let unreadMessageCount = 0;
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, {
             hour: '2-digit',
@@ -193,6 +210,23 @@
                 securityState.textContent = '中風險：HTTPS 已啟用，但目前未使用密語。';
                 securityNote.textContent = '網管通常看不到訊息內容，但服務端仍可看見明文；若要額外防護可啟用密語。';
             }
+        }
+
+        function refreshTitleAlert() {
+            if (unreadMessageCount > 0) {
+                document.title = `（${unreadMessageCount}）🔔 ${defaultTitle}`;
+            } else {
+                document.title = defaultTitle;
+            }
+        }
+
+        function markIncomingActivity(data) {
+            if (!document.hidden) return;
+            if (data.type !== 'message') return;
+            if (data.userId === userId) return;
+
+            unreadMessageCount += 1;
+            refreshTitleAlert();
         }
 
         function renderMessage(data) {
@@ -258,6 +292,13 @@
             if (!attachment || !attachment.dataUrl) return;
             const type = attachment.type || '';
 
+            if (type === 'application/pdf') {
+                const pdfEl = document.createElement('iframe');
+                pdfEl.src = attachment.dataUrl;
+                pdfEl.className = 'msg-pdf';
+                pdfEl.title = attachment.name || 'PDF';
+                container.appendChild(pdfEl);
+            } else if (type.startsWith('image/')) {
             if (type.startsWith('image/')) {
                 const imgEl = document.createElement('img');
                 imgEl.src = attachment.dataUrl;
@@ -414,6 +455,41 @@
                 const matched = query
                     ? gifCatalog.filter(item => item.name.toLowerCase().includes(query) || item.keywords.some(tag => tag.includes(query)))
                     : gifCatalog;
+                const localItems = refresh ? randomPick(matched, gifPageSize) : matched.slice(0, gifPageSize);
+
+                const endpoint = query ? 'search' : 'trending';
+                const params = new URLSearchParams({
+                    api_key: giphyApiKey,
+                    limit: String(gifPageSize),
+                    rating: 'g',
+                    offset: refresh ? String(Math.floor(Math.random() * 24)) : '0'
+                });
+                if (query) params.set('q', query);
+
+                let apiItems = [];
+                try {
+                    const resp = await fetch(`https://api.giphy.com/v1/gifs/${endpoint}?${params.toString()}`);
+                    if (resp.ok) {
+                        const body = await resp.json();
+                        apiItems = (body.data || []).map(gif => ({
+                            name: gif.title || query || 'GIF',
+                            url: gif.images?.fixed_height_small?.url || gif.images?.downsized_medium?.url,
+                            keywords: []
+                        })).filter(item => item.url);
+                    }
+                } catch {
+                    // 外部 API 失敗時，保留內建清單作為穩定 fallback
+                }
+
+                const merged = [];
+                const seen = new Set();
+                [...localItems, ...apiItems].forEach(item => {
+                    if (!item?.url || seen.has(item.url)) return;
+                    seen.add(item.url);
+                    merged.push(item);
+                });
+
+                renderGifOptions(merged.slice(0, Math.max(gifPageSize, 12)));
                 const items = refresh ? randomPick(matched, gifPageSize) : matched.slice(0, gifPageSize);
                 renderGifOptions(items);
             } catch {
@@ -483,6 +559,7 @@
                 return;
             }
 
+            markIncomingActivity(data);
             renderMessage(data);
         };
 
@@ -513,6 +590,12 @@
         });
 
         roomKeyInput.addEventListener('input', updateSecurityStatus);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                unreadMessageCount = 0;
+                refreshTitleAlert();
+            }
+        });
 
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
