@@ -23,6 +23,10 @@ function broadcast(data) {
   });
 }
 
+function broadcastSystem(text) {
+  broadcast({ type: 'system', text, createdAt: new Date().toISOString() });
+}
+
 function broadcastUserList() {
   const userList = Array.from(clients.values()).map(c => c.nickname);
   broadcast({ type: 'userList', users: userList });
@@ -75,7 +79,7 @@ const server = http.createServer((req, res) => {
       clearTimeout(clients.get(userId).timer);
       clients.get(userId).lastSeen = Date.now();
     } else {
-      broadcast({ type: 'system', text: `${nickname} 進入了聊天室。` });
+      broadcastSystem(`${nickname} 進入了聊天室。`);
     }
 
     const clientData = { res, ip, nickname, lastSeen: Date.now() };
@@ -88,7 +92,7 @@ const server = http.createServer((req, res) => {
         if (clients.get(userId)?.res === res) {
           const currentNickname = clients.get(userId)?.nickname || nickname;
           clients.delete(userId);
-          broadcast({ type: 'system', text: `${currentNickname} 離開了聊天室。` });
+          broadcastSystem(`${currentNickname} 離開了聊天室。`);
           broadcastUserList();
         }
       }, 5000);
@@ -107,13 +111,22 @@ const server = http.createServer((req, res) => {
       if (client) {
         client.lastSeen = Date.now(); // 更新最後活動時間
         const text = (data.message || '').toString();
-        if (text.trim()) {
+        const messageType = data.messageType === 'gif' ? 'gif' : 'text';
+        const gifUrl = (data.gifUrl || '').toString().trim();
+
+        const isValidGifUrl = messageType === 'gif' && /^https:\/\/.+/i.test(gifUrl);
+        const hasValidText = messageType === 'text' && text.trim();
+
+        if (hasValidText || isValidGifUrl) {
           broadcast({
             type: 'message',
             user: client.nickname,
             text,
+            gifUrl: isValidGifUrl ? gifUrl : '',
+            messageType,
             userId: data.userId,
-            encrypted: Boolean(data.encrypted)
+            encrypted: messageType === 'text' ? Boolean(data.encrypted) : false,
+            createdAt: new Date().toISOString()
           });
         }
       }
@@ -135,7 +148,7 @@ const server = http.createServer((req, res) => {
         client.nickname = newName;
         client.lastSeen = Date.now();
         if (newName !== oldName) {
-          broadcast({ type: 'system', text: `${oldName} 已改名為 ${newName}。` });
+          broadcastSystem(`${oldName} 已改名為 ${newName}。`);
           broadcastUserList();
         }
       }
@@ -170,7 +183,7 @@ setInterval(() => {
     if (now - client.lastSeen > IDLE_TIMEOUT) {
       client.res.end();
       clients.delete(userId);
-      broadcast({ type: 'system', text: `${client.nickname} 因閒置過久被移出。` });
+      broadcastSystem(`${client.nickname} 因閒置過久被移出。`);
       broadcastUserList();
     }
   });
