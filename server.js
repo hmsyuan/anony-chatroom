@@ -43,33 +43,6 @@ const builtInGifPools = {
   ]
 };
 
-const builtInGifPools = {
-  cats: [
-    { name: 'Cat typing', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
-    { name: 'Cat hi', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
-    { name: 'Happy cat', url: 'https://media.giphy.com/media/v6aOjy0Qo1fIA/giphy.gif' },
-    { name: 'Cat wow', url: 'https://media.giphy.com/media/ICOgUNjpvO0PC/giphy.gif' }
-  ],
-  memes: [
-    { name: 'Mind blown', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
-    { name: 'Thumbs up', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
-    { name: 'Nice', url: 'https://media.giphy.com/media/yJFeycRK2DB4c/giphy.gif' },
-    { name: 'Oh no', url: 'https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif' }
-  ],
-  reactions: [
-    { name: 'Clap', url: 'https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif' },
-    { name: 'LOL', url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
-    { name: 'Facepalm', url: 'https://media.giphy.com/media/TJawtKM6OCKkvwCIqX/giphy.gif' },
-    { name: 'Party', url: 'https://media.giphy.com/media/MeIucAjPKoA120R7sN/giphy.gif' }
-  ],
-  anime: [
-    { name: 'Anime wow', url: 'https://media.giphy.com/media/13borq7Zo2kulO/giphy.gif' },
-    { name: 'Nod', url: 'https://media.giphy.com/media/KzJkzjggfGN5Py6nkT/giphy.gif' },
-    { name: 'Wave', url: 'https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif' },
-    { name: 'Excited', url: 'https://media.giphy.com/media/1yldusVtwRA9r9EUan/giphy.gif' }
-  ]
-};
-
 function getIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) return forwarded.split(',')[0];
