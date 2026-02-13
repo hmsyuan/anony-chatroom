@@ -14,15 +14,17 @@
         .other { align-self: flex-start; background: #fff; border: 1px solid #ddd; }
         .me { align-self: flex-end; background: #dcf8c6; text-align: right; }
         .user-name { font-size: 0.7em; color: #666; margin-bottom: 2px; }
-        form { display: flex; }
+        form { display: flex; margin-bottom: 8px; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
         #toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
         #nickname { max-width: 200px; }
+        #room-key { max-width: 220px; }
         #emoji-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
         .emoji-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
         .emoji-btn:hover { background: #f0f0f0; }
         #user-list { font-size: 0.9em; line-height: 1.6; }
+        .hint { color: #666; font-size: 0.82em; margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -32,12 +34,16 @@
             <input type="text" id="nickname" maxlength="20" placeholder="修改暱稱" />
             <button type="button" id="rename-btn">更新暱稱</button>
         </div>
-        <div id="emoji-panel"></div>
+        <div id="toolbar">
+            <input type="password" id="room-key" placeholder="可選：輸入密語啟用簡易加密" autocomplete="off" />
+        </div>
+        <div class="hint">輸入相同密語的使用者可解讀訊息；未輸入者只會看到亂碼。</div>
         <div id="chat"></div>
         <form id="form">
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
             <button>送出</button>
         </form>
+        <div id="emoji-panel"></div>
     </div>
     <div id="sidebar">
         <h4>在線名單</h4>
@@ -60,8 +66,74 @@
         const userListDiv = document.getElementById('user-list');
         const nicknameInput = document.getElementById('nickname');
         const msgInput = document.getElementById('msg');
+        const roomKeyInput = document.getElementById('room-key');
         const emojiPanel = document.getElementById('emoji-panel');
         nicknameInput.value = myNickname;
+
+        function xorCrypt(text, key) {
+            let out = '';
+            for (let i = 0; i < text.length; i += 1) {
+                out += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+            }
+            return out;
+        }
+
+        function encodeMessage(text, key) {
+            if (!key) return { text, encrypted: false };
+            const encrypted = xorCrypt(unescape(encodeURIComponent(text)), key);
+            return { text: btoa(encrypted), encrypted: true };
+        }
+
+        function decodeMessage(text, key) {
+            if (!key) return '[加密訊息：請輸入密語解密]';
+            try {
+                const raw = atob(text);
+                const decrypted = xorCrypt(raw, key);
+                return decodeURIComponent(escape(decrypted));
+            } catch {
+                return '[無法解密訊息]';
+            }
+        }
+
+        function renderMessage(data) {
+            const el = document.createElement('div');
+            if (data.type === 'system') {
+                el.className = 'msg system';
+                el.innerText = data.text;
+            } else {
+                const isMe = data.userId === userId;
+                el.className = `msg ${isMe ? 'me' : 'other'}`;
+
+                const nameEl = document.createElement('div');
+                nameEl.className = 'user-name';
+                nameEl.innerText = data.user;
+
+                const contentEl = document.createElement('div');
+                contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
+
+                el.appendChild(nameEl);
+                el.appendChild(contentEl);
+            }
+
+            chatDiv.appendChild(el);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        function sendHeartbeat() {
+            fetch('/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId })
+            });
+        }
+
+        let lastHeartbeatAt = 0;
+        function heartbeatOnActivity() {
+            const now = Date.now();
+            if (now - lastHeartbeatAt < 20000) return;
+            lastHeartbeatAt = now;
+            sendHeartbeat();
+        }
 
         emojis.forEach(emoji => {
             const btn = document.createElement('button');
@@ -71,6 +143,7 @@
             btn.onclick = () => {
                 msgInput.value += emoji;
                 msgInput.focus();
+                heartbeatOnActivity();
             };
             emojiPanel.appendChild(btn);
         });
@@ -85,25 +158,11 @@
                 return;
             }
 
-            const el = document.createElement("div");
-            if (data.type === 'system') {
-                el.className = "msg system";
-                el.innerText = data.text;
-            } else {
-                const isMe = data.userId === userId;
-                el.className = `msg ${isMe ? 'me' : 'other'}`;
-                el.innerHTML = `<div class="user-name">${data.user}</div><div>${data.text}</div>`;
-            }
-
-            chatDiv.appendChild(el);
-            chatDiv.scrollTop = chatDiv.scrollHeight;
+            renderMessage(data);
         };
 
         evtSource.onerror = () => {
-            const el = document.createElement("div");
-            el.className = "msg system";
-            el.innerText = "連線已中斷。";
-            chatDiv.appendChild(el);
+            renderMessage({ type: 'system', text: '連線已中斷。' });
             evtSource.close();
         };
 
@@ -130,15 +189,26 @@
 
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
-            if(!msgInput.value) return;
+            if (!msgInput.value) return;
+
+            const key = roomKeyInput.value;
+            const payload = encodeMessage(msgInput.value, key);
 
             fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: msgInput.value, userId: userId })
+                body: JSON.stringify({ message: payload.text, encrypted: payload.encrypted, userId: userId })
             });
             msgInput.value = '';
+            heartbeatOnActivity();
         };
+
+        ['mousemove', 'keydown', 'click', 'touchstart'].forEach(eventName => {
+            document.addEventListener(eventName, heartbeatOnActivity, { passive: true });
+        });
+        setInterval(sendHeartbeat, 60000);
+        sendHeartbeat();
     </script>
 </body>
 </html>
+```
