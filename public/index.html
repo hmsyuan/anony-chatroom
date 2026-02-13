@@ -22,6 +22,8 @@
         #nickname { max-width: 200px; }
         #room-key { max-width: 260px; }
         #emoji-panel, #gif-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        #gif-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
+        #gif-search { flex: 1; min-width: 160px; }
         .emoji-btn, .gif-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
         .emoji-btn:hover, .gif-btn:hover { background: #f0f0f0; }
         .gif-btn { width: 72px; height: 72px; padding: 0; overflow: hidden; }
@@ -56,6 +58,11 @@
         <div class="hint">Emoji</div>
         <div id="emoji-panel"></div>
         <div class="hint">GIF 快選（免費來源）</div>
+        <div id="gif-toolbar">
+            <input type="text" id="gif-search" placeholder="輸入關鍵字搜尋 GIF..." autocomplete="off" />
+            <button type="button" id="gif-search-btn">搜尋</button>
+            <button type="button" id="gif-refresh-btn">換一批</button>
+        </div>
         <div id="gif-panel"></div>
     </div>
     <div id="sidebar">
@@ -79,12 +86,21 @@
         }
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
-        const gifOptions = [
-            { name: 'Hi', url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbWV5eTFob2MwdjM2dDRzNnM5N2tlN3V3N3M2Y2cxczVrN3l4M2s5NCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif' },
-            { name: 'Cat', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
-            { name: 'Wow', url: 'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif' },
-            { name: 'Clap', url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif' },
-            { name: 'Party', url: 'https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif' }
+        const gifPageSize = 8;
+        let currentGifKeyword = '';
+        const gifLibrary = [
+            { name: 'Hi', tags: ['hi', 'hello', 'wave'], url: 'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif' },
+            { name: 'Cat', tags: ['cat', 'pet', 'cute'], url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
+            { name: 'Wow', tags: ['wow', 'surprised', 'shock'], url: 'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif' },
+            { name: 'Clap', tags: ['clap', 'applause', 'good'], url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif' },
+            { name: 'Party', tags: ['party', 'celebrate', 'happy'], url: 'https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif' },
+            { name: 'Laugh', tags: ['laugh', 'funny', 'lol'], url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
+            { name: 'Cry', tags: ['cry', 'sad', 'tears'], url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
+            { name: 'Thumbs Up', tags: ['ok', 'thumbs', 'like'], url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+            { name: 'Dance', tags: ['dance', 'party', 'move'], url: 'https://media.giphy.com/media/l0MYC0LajbaPoEADu/giphy.gif' },
+            { name: 'Mind Blown', tags: ['wow', 'mind', 'blown'], url: 'https://media.giphy.com/media/xT0xeJpnrWC4XWblEk/giphy.gif' },
+            { name: 'Thanks', tags: ['thanks', 'thank you', 'appreciate'], url: 'https://media.giphy.com/media/3oEdva9BUHPIs2SkGk/giphy.gif' },
+            { name: 'Nope', tags: ['no', 'nope', 'reject'], url: 'https://media.giphy.com/media/3og0IPxMM0erATueVW/giphy.gif' }
         ];
 
         const chatDiv = document.getElementById('chat');
@@ -94,17 +110,19 @@
         const roomKeyInput = document.getElementById('room-key');
         const emojiPanel = document.getElementById('emoji-panel');
         const gifPanel = document.getElementById('gif-panel');
+        const gifSearchInput = document.getElementById('gif-search');
+        const gifSearchBtn = document.getElementById('gif-search-btn');
+        const gifRefreshBtn = document.getElementById('gif-refresh-btn');
         const securityState = document.getElementById('security-state');
         const securityNote = document.getElementById('security-note');
         nicknameInput.value = myNickname;
+        const myMessageElements = new Map();
+        const readSent = new Set();
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
             hour: '2-digit',
             minute: '2-digit',
-            second: '2-digit'
+            hour12: false
         });
 
         function formatLocalTime(iso) {
@@ -174,10 +192,12 @@
                 const isMe = data.userId === userId;
                 el.className = `msg ${isMe ? 'me' : 'other'}`;
 
-                const nameEl = document.createElement('div');
-                nameEl.className = 'user-name';
-                nameEl.innerText = data.user;
-                el.appendChild(nameEl);
+                if (!isMe) {
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'user-name';
+                    nameEl.innerText = data.user;
+                    el.appendChild(nameEl);
+                }
 
                 if (data.messageType === 'gif' && data.gifUrl) {
                     const gifEl = document.createElement('img');
@@ -191,12 +211,26 @@
                     contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
                     el.appendChild(contentEl);
                 }
+
+                if (data.messageId && !isMe && !readSent.has(data.messageId)) {
+                    readSent.add(data.messageId);
+                    fetch('/read', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, messageId: data.messageId })
+                    });
+                }
             }
 
             if (timeText) {
                 const timeEl = document.createElement('div');
                 timeEl.className = 'time-label';
                 timeEl.innerText = timeText;
+                if (data.userId === userId && data.type !== 'system') {
+                    if (data.messageId) myMessageElements.set(data.messageId, timeEl);
+                    timeEl.dataset.readCount = '0';
+                    timeEl.innerText = `${timeText} · 已讀 0`;
+                }
                 el.appendChild(timeEl);
             }
 
@@ -233,21 +267,60 @@
             emojiPanel.appendChild(btn);
         });
 
-        gifOptions.forEach(item => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'gif-btn';
-            btn.title = `傳送 GIF: ${item.name}`;
-            btn.innerHTML = `<img src="${item.url}" alt="${item.name}" loading="lazy" />`;
-            btn.onclick = () => {
-                fetch('/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
-                });
-                heartbeatOnActivity();
-            };
-            gifPanel.appendChild(btn);
+        function renderGifOptions(items) {
+            gifPanel.innerHTML = '';
+
+            if (!items.length) {
+                gifPanel.innerHTML = '<div class="hint">找不到 GIF，請換個關鍵字試試。</div>';
+                return;
+            }
+
+            items.forEach(item => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'gif-btn';
+                btn.title = `傳送 GIF: ${item.name}`;
+                btn.innerHTML = `<img src="${item.url}" alt="${item.name}" loading="lazy" />`;
+                btn.onclick = () => {
+                    fetch('/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
+                    });
+                    heartbeatOnActivity();
+                };
+                gifPanel.appendChild(btn);
+            });
+        }
+
+        function shuffle(items) {
+            const arr = [...items];
+            for (let i = arr.length - 1; i > 0; i -= 1) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        function loadGifs(keyword = '', refresh = false) {
+            const query = keyword.trim().toLowerCase();
+            currentGifKeyword = query;
+
+            const matched = query
+                ? gifLibrary.filter(item => item.name.toLowerCase().includes(query) || item.tags.some(tag => tag.includes(query)))
+                : gifLibrary;
+
+            const items = (refresh ? shuffle(matched) : matched).slice(0, gifPageSize);
+            renderGifOptions(items);
+        }
+
+        gifSearchBtn.addEventListener('click', () => loadGifs(gifSearchInput.value));
+        gifRefreshBtn.addEventListener('click', () => loadGifs(currentGifKeyword, true));
+        gifSearchInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                loadGifs(gifSearchInput.value);
+            }
         });
 
         const evtSource = new EventSource(`/events?id=${userId}&name=${encodeURIComponent(myNickname)}`);
@@ -257,6 +330,16 @@
 
             if (data.type === 'userList') {
                 userListDiv.innerHTML = data.users.map(u => `<div>● ${u}</div>`).join('');
+                return;
+            }
+
+            if (data.type === 'readReceipt') {
+                const timeEl = myMessageElements.get(data.messageId);
+                if (timeEl) {
+                    const timeText = timeEl.innerText.split(' · ')[0];
+                    timeEl.dataset.readCount = String(data.readCount || 0);
+                    timeEl.innerText = `${timeText} · 已讀 ${data.readCount || 0}`;
+                }
                 return;
             }
 
@@ -313,6 +396,7 @@
         setInterval(sendHeartbeat, 60000);
         updateSecurityStatus();
         sendHeartbeat();
+        loadGifs();
     </script>
 </body>
 </html>
