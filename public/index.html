@@ -15,13 +15,13 @@
         .me { align-self: flex-end; background: #dcf8c6; text-align: right; }
         .user-name { font-size: 0.7em; color: #666; margin-bottom: 2px; }
         .time-label { font-size: 0.68em; color: #777; margin-top: 4px; }
-        form { display: flex; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; }
+        form { display: flex; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; position: relative; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
         #toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
         #nickname { max-width: 200px; }
         #room-key { max-width: 260px; }
-        #emoji-panel, #gif-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        #emoji-panel, #gif-panel { display: flex; gap: 6px; flex-wrap: wrap; }
         #gif-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
         #gif-search { flex: 1; min-width: 160px; }
         .emoji-btn, .gif-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
@@ -48,6 +48,18 @@
         .msg-actions { margin-top: 6px; display: flex; justify-content: flex-end; }
         .tiny-btn { font-size: 12px; padding: 3px 6px; }
         .deleted-note { color: #888; font-style: italic; }
+        .picker-pop { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(480px, 90vw); background: #fff; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12); padding: 10px; z-index: 40; }
+        .picker-pop.hidden { display: none !important; }
+        #emoji-pop { max-width: 300px; }
+        #gif-pop { max-width: 520px; }
+        #gif-panel { margin-top: 8px; max-height: 240px; overflow: auto; }
+        .icon-btn { min-width: 44px; padding: 8px 10px; }
+        .pdf-actions { margin-top: 6px; display: flex; gap: 6px; }
+        #pdf-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        #pdf-modal.hidden { display: none; }
+        .pdf-modal-content { width: min(95vw, 1100px); height: min(92vh, 900px); background: #fff; border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
+        .pdf-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-bottom: 1px solid #ddd; }
+        #pdf-modal-iframe { border: none; width: 100%; flex: 1; }
     </style>
 </head>
 <body>
@@ -56,29 +68,32 @@
         <div id="toolbar">
             <input type="text" id="nickname" maxlength="20" placeholder="修改暱稱" />
             <button type="button" id="rename-btn">更新暱稱</button>
-        </div>
-        <div id="toolbar">
             <input type="password" id="room-key" placeholder="可選：輸入密語啟用簡易加密" autocomplete="off" />
         </div>
         <div class="hint">輸入相同密語的使用者可解讀訊息；未輸入者只會看到亂碼。</div>
         <div id="chat"></div>
         <form id="form">
+            <div id="emoji-pop" class="picker-pop hidden">
+                <div class="hint">Emoji</div>
+                <div id="emoji-panel"></div>
+            </div>
+            <div id="gif-pop" class="picker-pop hidden">
+                <div class="hint">GIF 快選（內建 + 外部搜尋）</div>
+                <div id="gif-toolbar">
+                    <input type="text" id="gif-search" placeholder="輸入關鍵字搜尋 GIF..." autocomplete="off" />
+                    <button type="button" id="gif-search-btn">搜尋</button>
+                    <button type="button" id="gif-refresh-btn">換一批</button>
+                </div>
+                <div id="gif-panel"></div>
+            </div>
+            <button type="button" id="emoji-toggle" class="icon-btn" title="Emoji">😀</button>
+            <button type="button" id="gif-toggle" class="icon-btn" title="GIF">GIF</button>
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
             <button type="button" id="attach-btn">上傳檔案</button>
             <button>送出</button>
         </form>
         <input id="file-input" type="file" accept="image/*,application/pdf,.txt,.md,.json" />
         <div id="file-preview" class="hidden"></div>
-
-        <div class="hint">Emoji</div>
-        <div id="emoji-panel"></div>
-        <div class="hint">GIF 快選（內建 + 外部搜尋）</div>
-        <div id="gif-toolbar">
-            <input type="text" id="gif-search" placeholder="輸入關鍵字搜尋 GIF..." autocomplete="off" />
-            <button type="button" id="gif-search-btn">搜尋</button>
-            <button type="button" id="gif-refresh-btn">換一批</button>
-        </div>
-        <div id="gif-panel"></div>
     </div>
     <div id="sidebar">
         <div class="security-panel">
@@ -88,6 +103,16 @@
         </div>
         <h4>在線名單</h4>
         <div id="user-list">載入中...</div>
+    </div>
+
+    <div id="pdf-modal" class="hidden">
+        <div class="pdf-modal-content">
+            <div class="pdf-modal-header">
+                <strong id="pdf-modal-title">PDF 預覽</strong>
+                <button type="button" id="pdf-modal-close">關閉</button>
+            </div>
+            <iframe id="pdf-modal-iframe" title="PDF 全螢幕預覽"></iframe>
+        </div>
     </div>
 
     <script>
@@ -119,11 +144,19 @@
         const gifSearchInput = document.getElementById('gif-search');
         const gifSearchBtn = document.getElementById('gif-search-btn');
         const gifRefreshBtn = document.getElementById('gif-refresh-btn');
+        const emojiPop = document.getElementById('emoji-pop');
+        const gifPop = document.getElementById('gif-pop');
+        const emojiToggle = document.getElementById('emoji-toggle');
+        const gifToggle = document.getElementById('gif-toggle');
         const securityState = document.getElementById('security-state');
         const securityNote = document.getElementById('security-note');
         const attachBtn = document.getElementById('attach-btn');
         const fileInput = document.getElementById('file-input');
         const filePreview = document.getElementById('file-preview');
+        const pdfModal = document.getElementById('pdf-modal');
+        const pdfModalTitle = document.getElementById('pdf-modal-title');
+        const pdfModalIframe = document.getElementById('pdf-modal-iframe');
+        const pdfModalClose = document.getElementById('pdf-modal-close');
 
         nicknameInput.value = myNickname;
         const myMessageElements = new Map();
@@ -209,6 +242,17 @@
             else setUnreadState();
         });
 
+        function openPdfModal(dataUrl, title) {
+            pdfModalTitle.textContent = title || 'PDF 預覽';
+            pdfModalIframe.src = dataUrl;
+            pdfModal.classList.remove('hidden');
+        }
+
+        function closePdfModal() {
+            pdfModal.classList.add('hidden');
+            pdfModalIframe.src = '';
+        }
+
         function renderAttachment(attachment) {
             if (!attachment) return null;
 
@@ -227,6 +271,16 @@
                 iframe.src = attachment.dataUrl;
                 iframe.title = attachment.name || 'PDF';
                 wrap.appendChild(iframe);
+
+                const actions = document.createElement('div');
+                actions.className = 'pdf-actions';
+                const fullscreenBtn = document.createElement('button');
+                fullscreenBtn.type = 'button';
+                fullscreenBtn.className = 'tiny-btn';
+                fullscreenBtn.textContent = '全螢幕預覽';
+                fullscreenBtn.onclick = () => openPdfModal(attachment.dataUrl, attachment.name || 'PDF 預覽');
+                actions.appendChild(fullscreenBtn);
+                wrap.appendChild(actions);
             }
 
             const link = document.createElement('a');
@@ -356,6 +410,33 @@
             sendHeartbeat();
         }
 
+        function closeAllPoppers() {
+            emojiPop.classList.add('hidden');
+            gifPop.classList.add('hidden');
+        }
+
+        emojiToggle.onclick = () => {
+            const willOpen = emojiPop.classList.contains('hidden');
+            closeAllPoppers();
+            if (willOpen) emojiPop.classList.remove('hidden');
+        };
+
+        gifToggle.onclick = () => {
+            const willOpen = gifPop.classList.contains('hidden');
+            closeAllPoppers();
+            if (willOpen) gifPop.classList.remove('hidden');
+        };
+
+        document.addEventListener('click', (event) => {
+            if (event.target.closest('#emoji-pop, #gif-pop, #emoji-toggle, #gif-toggle')) return;
+            closeAllPoppers();
+        });
+
+        pdfModalClose.onclick = closePdfModal;
+        pdfModal.addEventListener('click', (event) => {
+            if (event.target === pdfModal) closePdfModal();
+        });
+
         emojis.forEach(emoji => {
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -364,6 +445,7 @@
             btn.onclick = () => {
                 msgInput.value += emoji;
                 msgInput.focus();
+                closeAllPoppers();
                 heartbeatOnActivity();
             };
             emojiPanel.appendChild(btn);
@@ -388,6 +470,7 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
                     });
+                    closeAllPoppers();
                     heartbeatOnActivity();
                 };
                 gifPanel.appendChild(btn);
