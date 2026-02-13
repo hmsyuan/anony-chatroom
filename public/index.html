@@ -22,6 +22,8 @@
         #nickname { max-width: 200px; }
         #room-key { max-width: 260px; }
         #emoji-panel, #gif-panel { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        #gif-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
+        #gif-search { flex: 1; min-width: 160px; }
         .emoji-btn, .gif-btn { border: 1px solid #ddd; border-radius: 8px; background: #fff; padding: 6px 8px; cursor: pointer; }
         .emoji-btn:hover, .gif-btn:hover { background: #f0f0f0; }
         .gif-btn { width: 72px; height: 72px; padding: 0; overflow: hidden; }
@@ -56,6 +58,11 @@
         <div class="hint">Emoji</div>
         <div id="emoji-panel"></div>
         <div class="hint">GIF 快選（免費來源）</div>
+        <div id="gif-toolbar">
+            <input type="text" id="gif-search" placeholder="輸入關鍵字搜尋 GIF..." autocomplete="off" />
+            <button type="button" id="gif-search-btn">搜尋</button>
+            <button type="button" id="gif-refresh-btn">換一批</button>
+        </div>
         <div id="gif-panel"></div>
     </div>
     <div id="sidebar">
@@ -79,13 +86,9 @@
         }
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
-        const gifOptions = [
-            { name: 'Hi', url: 'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbWV5eTFob2MwdjM2dDRzNnM5N2tlN3V3N3M2Y2cxczVrN3l4M2s5NCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/l0MYt5jPR6QX5pnqM/giphy.gif' },
-            { name: 'Cat', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
-            { name: 'Wow', url: 'https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif' },
-            { name: 'Clap', url: 'https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif' },
-            { name: 'Party', url: 'https://media.giphy.com/media/26u4lOMA8JKSnL9Uk/giphy.gif' }
-        ];
+        const giphyApiKey = 'dc6zaTOxFJmzC';
+        const gifPageSize = 8;
+        let currentGifKeyword = '';
 
         const chatDiv = document.getElementById('chat');
         const userListDiv = document.getElementById('user-list');
@@ -94,17 +97,17 @@
         const roomKeyInput = document.getElementById('room-key');
         const emojiPanel = document.getElementById('emoji-panel');
         const gifPanel = document.getElementById('gif-panel');
+        const gifSearchInput = document.getElementById('gif-search');
+        const gifSearchBtn = document.getElementById('gif-search-btn');
+        const gifRefreshBtn = document.getElementById('gif-refresh-btn');
         const securityState = document.getElementById('security-state');
         const securityNote = document.getElementById('security-note');
         nicknameInput.value = myNickname;
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
             hour: '2-digit',
             minute: '2-digit',
-            second: '2-digit'
+            hour12: false
         });
 
         function formatLocalTime(iso) {
@@ -174,10 +177,12 @@
                 const isMe = data.userId === userId;
                 el.className = `msg ${isMe ? 'me' : 'other'}`;
 
-                const nameEl = document.createElement('div');
-                nameEl.className = 'user-name';
-                nameEl.innerText = data.user;
-                el.appendChild(nameEl);
+                if (!isMe) {
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'user-name';
+                    nameEl.innerText = data.user;
+                    el.appendChild(nameEl);
+                }
 
                 if (data.messageType === 'gif' && data.gifUrl) {
                     const gifEl = document.createElement('img');
@@ -233,21 +238,73 @@
             emojiPanel.appendChild(btn);
         });
 
-        gifOptions.forEach(item => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'gif-btn';
-            btn.title = `傳送 GIF: ${item.name}`;
-            btn.innerHTML = `<img src="${item.url}" alt="${item.name}" loading="lazy" />`;
-            btn.onclick = () => {
-                fetch('/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
-                });
-                heartbeatOnActivity();
-            };
-            gifPanel.appendChild(btn);
+        function renderGifOptions(items) {
+            gifPanel.innerHTML = '';
+
+            if (!items.length) {
+                gifPanel.innerHTML = '<div class="hint">找不到 GIF，請換個關鍵字試試。</div>';
+                return;
+            }
+
+            items.forEach(item => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'gif-btn';
+                btn.title = `傳送 GIF: ${item.name}`;
+                btn.innerHTML = `<img src="${item.url}" alt="${item.name}" loading="lazy" />`;
+                btn.onclick = () => {
+                    fetch('/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, messageType: 'gif', gifUrl: item.url, message: '' })
+                    });
+                    heartbeatOnActivity();
+                };
+                gifPanel.appendChild(btn);
+            });
+        }
+
+        async function loadGifs(keyword = '', refresh = false) {
+            const query = keyword.trim();
+            currentGifKeyword = query;
+
+            const endpoint = query ? 'search' : 'trending';
+            const offset = refresh ? Math.floor(Math.random() * 40) : 0;
+            const params = new URLSearchParams({
+                api_key: giphyApiKey,
+                limit: gifPageSize.toString(),
+                rating: 'g',
+                offset: offset.toString()
+            });
+
+            if (query) params.set('q', query);
+
+            gifSearchBtn.disabled = true;
+            gifRefreshBtn.disabled = true;
+
+            try {
+                const resp = await fetch(`https://api.giphy.com/v1/gifs/${endpoint}?${params.toString()}`);
+                const body = await resp.json();
+                const items = (body.data || []).map(gif => ({
+                    name: gif.title || query || 'GIF',
+                    url: gif.images?.fixed_height_small?.url || gif.images?.downsized_medium?.url
+                })).filter(item => item.url);
+                renderGifOptions(items);
+            } catch {
+                gifPanel.innerHTML = '<div class="hint">GIF 載入失敗，請稍後再試。</div>';
+            } finally {
+                gifSearchBtn.disabled = false;
+                gifRefreshBtn.disabled = false;
+            }
+        }
+
+        gifSearchBtn.addEventListener('click', () => loadGifs(gifSearchInput.value));
+        gifRefreshBtn.addEventListener('click', () => loadGifs(currentGifKeyword, true));
+        gifSearchInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                loadGifs(gifSearchInput.value);
+            }
         });
 
         const evtSource = new EventSource(`/events?id=${userId}&name=${encodeURIComponent(myNickname)}`);
@@ -313,6 +370,7 @@
         setInterval(sendHeartbeat, 60000);
         updateSecurityStatus();
         sendHeartbeat();
+        loadGifs();
     </script>
 </body>
 </html>
