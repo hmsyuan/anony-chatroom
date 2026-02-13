@@ -15,6 +15,9 @@
         .me { align-self: flex-end; background: #dcf8c6; text-align: right; }
         .user-name { font-size: 0.7em; color: #666; margin-bottom: 2px; }
         .time-label { font-size: 0.68em; color: #777; margin-top: 4px; }
+        .msg-meta { margin-top: 6px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+        .msg-meta.left { justify-content: flex-start; }
+        .msg-meta .time-label { margin-top: 0; }
         form { display: flex; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; position: relative; }
         input { flex: 1; padding: 10px; }
         button { padding: 10px; }
@@ -45,7 +48,7 @@
         .attachment-image { max-width: 240px; max-height: 180px; border-radius: 8px; display: block; }
         .attachment-link { font-size: 0.85em; display: inline-block; margin-top: 4px; }
         .attachment-pdf { width: 100%; max-width: 320px; height: 220px; border: 1px solid #ccc; border-radius: 8px; }
-        .msg-actions { margin-top: 6px; display: flex; justify-content: flex-end; }
+        .msg-actions { display: inline-flex; align-items: center; gap: 4px; }
         .tiny-btn { font-size: 12px; padding: 3px 6px; }
         .deleted-note { color: #888; font-style: italic; }
         .msg-delete-btn { opacity: 0.35; border: none; background: transparent; cursor: pointer; padding: 2px 4px; font-size: 13px; }
@@ -464,28 +467,34 @@
                     if (attachmentEl) el.appendChild(attachmentEl);
                 }
 
-                if (isMe && data.messageId) {
-                    const actions = document.createElement('div');
-                    actions.className = 'msg-actions';
-                    const delBtn = document.createElement('button');
-                    delBtn.type = 'button';
-                    delBtn.className = 'msg-delete-btn';
-                    delBtn.title = '收回/刪除';
-                    delBtn.textContent = '🗑';
-                    delBtn.onclick = () => {
-                        fetch('/message/delete', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId, messageId: data.messageId })
-                        });
-                    };
-                    actions.appendChild(delBtn);
-                    el.appendChild(actions);
+                if (data.messageId && !isMe && !readSent.has(data.messageId)) {
+                    readSent.add(data.messageId);
+                    fetch('/read', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, messageId: data.messageId })
+                    });
                 }
+            }
 
-                if (data.messageId) {
+            if (timeText) {
+                const metaRow = document.createElement('div');
+                metaRow.className = `msg-meta ${data.userId === userId ? '' : 'left'}`.trim();
+
+                const timeEl = document.createElement('div');
+                timeEl.className = 'time-label';
+                timeEl.innerText = timeText;
+                if (data.userId === userId && data.type !== 'system') {
+                    if (data.messageId) myMessageElements.set(data.messageId, timeEl);
+                    timeEl.dataset.readCount = '0';
+                    timeEl.innerText = `${timeText} · 已讀 0`;
+                }
+                metaRow.appendChild(timeEl);
+
+                if (data.type !== 'system' && data.messageId) {
                     const actions = document.createElement('div');
                     actions.className = 'msg-actions';
+
                     const replyBtn = document.createElement('button');
                     replyBtn.type = 'button';
                     replyBtn.className = 'msg-delete-btn';
@@ -498,29 +507,27 @@
                         msgInput.focus();
                     };
                     actions.appendChild(replyBtn);
-                    el.appendChild(actions);
+
+                    if (data.userId === userId) {
+                        const delBtn = document.createElement('button');
+                        delBtn.type = 'button';
+                        delBtn.className = 'msg-delete-btn';
+                        delBtn.title = '收回/刪除';
+                        delBtn.textContent = '🗑';
+                        delBtn.onclick = () => {
+                            fetch('/message/delete', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId, messageId: data.messageId })
+                            });
+                        };
+                        actions.appendChild(delBtn);
+                    }
+
+                    metaRow.appendChild(actions);
                 }
 
-                if (data.messageId && !isMe && !readSent.has(data.messageId)) {
-                    readSent.add(data.messageId);
-                    fetch('/read', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ userId, messageId: data.messageId })
-                    });
-                }
-            }
-
-            if (timeText) {
-                const timeEl = document.createElement('div');
-                timeEl.className = 'time-label';
-                timeEl.innerText = timeText;
-                if (data.userId === userId && data.type !== 'system') {
-                    if (data.messageId) myMessageElements.set(data.messageId, timeEl);
-                    timeEl.dataset.readCount = '0';
-                    timeEl.innerText = `${timeText} · 已讀 0`;
-                }
-                el.appendChild(timeEl);
+                el.appendChild(metaRow);
             }
 
             chatDiv.appendChild(el);
