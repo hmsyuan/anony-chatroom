@@ -28,7 +28,15 @@
         .emoji-btn:hover, .gif-btn:hover { background: #f0f0f0; }
         .gif-btn { width: 72px; height: 72px; padding: 0; overflow: hidden; }
         .gif-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .msg-gif { max-width: 220px; border-radius: 10px; margin-top: 4px; }
+        .msg-gif, .msg-image { max-width: 220px; border-radius: 10px; margin-top: 4px; }
+        .msg-file { margin-top: 6px; font-size: 0.88em; }
+        .msg-video { max-width: 280px; margin-top: 4px; border-radius: 8px; }
+        .pending-preview { margin-bottom: 8px; padding: 8px; border: 1px dashed #bbb; border-radius: 8px; background: #fff; }
+        .pending-preview.hidden { display: none; }
+        .pending-preview-title { font-size: 0.8em; color: #666; margin-bottom: 6px; }
+        .pending-file-meta { font-size: 0.8em; color: #444; margin-top: 6px; }
+        .pending-actions { margin-top: 6px; }
+        .pending-actions button { padding: 6px 8px; font-size: 0.82em; }
         #user-list { font-size: 0.9em; line-height: 1.6; }
         .hint { color: #666; font-size: 0.82em; margin-bottom: 8px; }
         .security-panel { margin-bottom: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: #fcfcfc; }
@@ -53,8 +61,10 @@
         <div id="chat"></div>
         <form id="form">
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
+            <input type="file" id="file-input" />
             <button>送出</button>
         </form>
+        <div id="pending-preview" class="pending-preview hidden"></div>
         <div class="hint">Emoji</div>
         <div id="emoji-panel"></div>
         <div class="hint">GIF 快選（免費來源）</div>
@@ -86,9 +96,23 @@
         }
 
         const emojis = ['😀', '😂', '😍', '🥳', '👍', '🙏', '❤️', '🔥', '😭', '😎'];
-        const giphyApiKey = 'dc6zaTOxFJmzC';
         const gifPageSize = 8;
         let currentGifKeyword = '';
+        const gifCatalog = [
+            { name: 'Happy Cat', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif', keywords: ['happy', 'cat', '開心'] },
+            { name: 'Thumbs Up', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif', keywords: ['ok', 'thumbs', '讚'] },
+            { name: 'Excited', url: 'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif', keywords: ['wow', 'excited', '興奮'] },
+            { name: 'Laugh', url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif', keywords: ['laugh', 'lol', '笑'] },
+            { name: 'Party', url: 'https://media.giphy.com/media/3KC2jD2QcBOSc/giphy.gif', keywords: ['party', '慶祝'] },
+            { name: 'Sad', url: 'https://media.giphy.com/media/ROF8OQvDmxytW/giphy.gif', keywords: ['sad', 'cry', '難過'] },
+            { name: 'Thanks', url: 'https://media.giphy.com/media/3oz8xIsloV7zOmt81G/giphy.gif', keywords: ['thanks', 'thank you', '謝謝'] },
+            { name: 'Hi', url: 'https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif', keywords: ['hi', 'hello', '嗨'] },
+            { name: 'Nope', url: 'https://media.giphy.com/media/3o7TKwmnDgQb5jemjK/giphy.gif', keywords: ['no', 'nope', '不要'] },
+            { name: 'Clap', url: 'https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif', keywords: ['clap', 'good', '棒'] },
+            { name: 'Angry', url: 'https://media.giphy.com/media/l4FGuhL4U2WyjdkaY/giphy.gif', keywords: ['angry', 'mad', '生氣'] },
+            { name: 'Love', url: 'https://media.giphy.com/media/26FLdmIp6wJr91JAI/giphy.gif', keywords: ['love', 'heart', '愛'] }
+        ];
+        const MAX_ATTACHMENT_SIZE = 2 * 1024 * 1024;
 
         const chatDiv = document.getElementById('chat');
         const userListDiv = document.getElementById('user-list');
@@ -100,11 +124,14 @@
         const gifSearchInput = document.getElementById('gif-search');
         const gifSearchBtn = document.getElementById('gif-search-btn');
         const gifRefreshBtn = document.getElementById('gif-refresh-btn');
+        const fileInput = document.getElementById('file-input');
+        const pendingPreview = document.getElementById('pending-preview');
         const securityState = document.getElementById('security-state');
         const securityNote = document.getElementById('security-note');
         nicknameInput.value = myNickname;
         const myMessageElements = new Map();
         const readSent = new Set();
+        let pendingAttachment = null;
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, {
             hour: '2-digit',
@@ -199,6 +226,8 @@
                     el.appendChild(contentEl);
                 }
 
+                renderAttachment(el, data.attachment);
+
                 if (data.messageId && !isMe && !readSent.has(data.messageId)) {
                     readSent.add(data.messageId);
                     fetch('/read', {
@@ -223,6 +252,91 @@
 
             chatDiv.appendChild(el);
             chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        function renderAttachment(container, attachment) {
+            if (!attachment || !attachment.dataUrl) return;
+            const type = attachment.type || '';
+
+            if (type.startsWith('image/')) {
+                const imgEl = document.createElement('img');
+                imgEl.src = attachment.dataUrl;
+                imgEl.alt = attachment.name || '上傳圖片';
+                imgEl.className = 'msg-image';
+                imgEl.loading = 'lazy';
+                container.appendChild(imgEl);
+                return;
+            }
+
+            if (type.startsWith('video/')) {
+                const videoEl = document.createElement('video');
+                videoEl.src = attachment.dataUrl;
+                videoEl.controls = true;
+                videoEl.className = 'msg-video';
+                container.appendChild(videoEl);
+            } else if (type.startsWith('audio/')) {
+                const audioEl = document.createElement('audio');
+                audioEl.src = attachment.dataUrl;
+                audioEl.controls = true;
+                audioEl.style.marginTop = '6px';
+                container.appendChild(audioEl);
+            }
+
+            const fileWrap = document.createElement('div');
+            fileWrap.className = 'msg-file';
+            const fileLink = document.createElement('a');
+            fileLink.href = attachment.dataUrl;
+            fileLink.download = attachment.name || 'attachment';
+            fileLink.target = '_blank';
+            fileLink.rel = 'noopener noreferrer';
+            fileLink.textContent = `📎 ${attachment.name || '附件'}`;
+            fileWrap.appendChild(fileLink);
+            container.appendChild(fileWrap);
+        }
+
+        function formatSize(size) {
+            if (!size) return '未知大小';
+            if (size < 1024) return `${size} B`;
+            if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+            return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+        }
+
+        function clearPendingAttachment() {
+            pendingAttachment = null;
+            fileInput.value = '';
+            pendingPreview.innerHTML = '';
+            pendingPreview.classList.add('hidden');
+        }
+
+        function renderPendingAttachment() {
+            if (!pendingAttachment) {
+                clearPendingAttachment();
+                return;
+            }
+
+            pendingPreview.classList.remove('hidden');
+            pendingPreview.innerHTML = '';
+
+            const title = document.createElement('div');
+            title.className = 'pending-preview-title';
+            title.textContent = '待送出附件預覽（僅本次訊息）';
+            pendingPreview.appendChild(title);
+
+            renderAttachment(pendingPreview, pendingAttachment);
+
+            const meta = document.createElement('div');
+            meta.className = 'pending-file-meta';
+            meta.textContent = `${pendingAttachment.name || '附件'} · ${formatSize(pendingAttachment.size)}`;
+            pendingPreview.appendChild(meta);
+
+            const actionWrap = document.createElement('div');
+            actionWrap.className = 'pending-actions';
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.textContent = '移除附件';
+            removeBtn.onclick = clearPendingAttachment;
+            actionWrap.appendChild(removeBtn);
+            pendingPreview.appendChild(actionWrap);
         }
 
         function sendHeartbeat() {
@@ -280,31 +394,27 @@
             });
         }
 
+        function randomPick(items, count) {
+            const pool = [...items];
+            const out = [];
+            while (pool.length && out.length < count) {
+                const index = Math.floor(Math.random() * pool.length);
+                out.push(pool.splice(index, 1)[0]);
+            }
+            return out;
+        }
+
         async function loadGifs(keyword = '', refresh = false) {
-            const query = keyword.trim();
+            const query = keyword.trim().toLowerCase();
             currentGifKeyword = query;
-
-            const endpoint = query ? 'search' : 'trending';
-            const offset = refresh ? Math.floor(Math.random() * 40) : 0;
-            const params = new URLSearchParams({
-                api_key: giphyApiKey,
-                limit: gifPageSize.toString(),
-                rating: 'g',
-                offset: offset.toString()
-            });
-
-            if (query) params.set('q', query);
-
             gifSearchBtn.disabled = true;
             gifRefreshBtn.disabled = true;
 
             try {
-                const resp = await fetch(`https://api.giphy.com/v1/gifs/${endpoint}?${params.toString()}`);
-                const body = await resp.json();
-                const items = (body.data || []).map(gif => ({
-                    name: gif.title || query || 'GIF',
-                    url: gif.images?.fixed_height_small?.url || gif.images?.downsized_medium?.url
-                })).filter(item => item.url);
+                const matched = query
+                    ? gifCatalog.filter(item => item.name.toLowerCase().includes(query) || item.keywords.some(tag => tag.includes(query)))
+                    : gifCatalog;
+                const items = refresh ? randomPick(matched, gifPageSize) : matched.slice(0, gifPageSize);
                 renderGifOptions(items);
             } catch {
                 gifPanel.innerHTML = '<div class="hint">GIF 載入失敗，請稍後再試。</div>';
@@ -313,6 +423,36 @@
                 gifRefreshBtn.disabled = false;
             }
         }
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files?.[0];
+            if (!file) {
+                clearPendingAttachment();
+                return;
+            }
+
+            if (file.size > MAX_ATTACHMENT_SIZE) {
+                alert('附件過大，請選擇 2MB 以下檔案。');
+                clearPendingAttachment();
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                pendingAttachment = {
+                    name: file.name,
+                    type: file.type || 'application/octet-stream',
+                    size: file.size,
+                    dataUrl: String(reader.result || '')
+                };
+                renderPendingAttachment();
+            };
+            reader.onerror = () => {
+                alert('附件讀取失敗，請重試。');
+                clearPendingAttachment();
+            };
+            reader.readAsDataURL(file);
+        });
 
         gifSearchBtn.addEventListener('click', () => loadGifs(gifSearchInput.value));
         gifRefreshBtn.addEventListener('click', () => loadGifs(currentGifKeyword, true));
@@ -376,7 +516,7 @@
 
         document.getElementById('form').onsubmit = function(e) {
             e.preventDefault();
-            if (!msgInput.value) return;
+            if (!msgInput.value && !pendingAttachment) return;
 
             const key = roomKeyInput.value;
             const payload = encodeMessage(msgInput.value, key);
@@ -384,9 +524,16 @@
             fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: payload.text, encrypted: payload.encrypted, messageType: 'text', userId: userId })
+                body: JSON.stringify({
+                    message: payload.text,
+                    encrypted: payload.encrypted,
+                    messageType: 'text',
+                    attachment: pendingAttachment,
+                    userId: userId
+                })
             });
             msgInput.value = '';
+            clearPendingAttachment();
             heartbeatOnActivity();
         };
 
