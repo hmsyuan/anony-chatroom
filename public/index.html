@@ -48,6 +48,19 @@
         .msg-actions { margin-top: 6px; display: flex; justify-content: flex-end; }
         .tiny-btn { font-size: 12px; padding: 3px 6px; }
         .deleted-note { color: #888; font-style: italic; }
+        .msg-delete-btn { opacity: 0.35; border: none; background: transparent; cursor: pointer; padding: 2px 4px; font-size: 13px; }
+        .msg-delete-btn:hover { opacity: 0.85; }
+        .reply-chip { display: inline-flex; align-items: center; gap: 6px; background: #eef4ff; border: 1px solid #cfdcff; border-radius: 8px; padding: 4px 8px; margin-bottom: 6px; font-size: 12px; }
+        .reply-chip button { padding: 2px 6px; font-size: 11px; }
+        .reply-box { border-left: 3px solid #98b6ff; background: #f5f8ff; border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; font-size: 12px; text-align: left; }
+        .reply-meta { color: #4b66a8; font-weight: 600; margin-bottom: 2px; }
+        .link-preview { margin-top: 6px; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff; text-align: left; max-width: 360px; }
+        .link-preview img { width: 100%; max-height: 140px; object-fit: cover; display: block; }
+        .link-preview-body { padding: 8px; }
+        .link-preview-title { font-size: 13px; font-weight: 700; color: #223; margin-bottom: 4px; }
+        .link-preview-desc { font-size: 12px; color: #555; }
+        .mention { background: #ffef9f; border-radius: 4px; padding: 0 2px; }
+        .hidden { display: none !important; }
         .picker-pop { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(480px, 90vw); background: #fff; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12); padding: 10px; z-index: 40; }
         .picker-pop.hidden { display: none !important; }
         #emoji-pop { max-width: 300px; }
@@ -86,6 +99,7 @@
                 </div>
                 <div id="gif-panel"></div>
             </div>
+            <div id="reply-chip" class="reply-chip hidden"></div>
             <button type="button" id="emoji-toggle" class="icon-btn" title="Emoji">😀</button>
             <button type="button" id="gif-toggle" class="icon-btn" title="GIF">GIF</button>
             <input type="text" id="msg" placeholder="輸入訊息..." autocomplete="off" />
@@ -153,6 +167,7 @@
         const attachBtn = document.getElementById('attach-btn');
         const fileInput = document.getElementById('file-input');
         const filePreview = document.getElementById('file-preview');
+        const replyChip = document.getElementById('reply-chip');
         const pdfModal = document.getElementById('pdf-modal');
         const pdfModalTitle = document.getElementById('pdf-modal-title');
         const pdfModalIframe = document.getElementById('pdf-modal-iframe');
@@ -163,6 +178,8 @@
         const messageNodeMap = new Map();
         const readSent = new Set();
         let pendingAttachment = null;
+        let replyingTo = null;
+        let onlineUsers = [];
 
         const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -253,6 +270,72 @@
             pdfModalIframe.src = '';
         }
 
+        
+        function buildReplyChip() {
+            if (!replyingTo) {
+                replyChip.classList.add('hidden');
+                replyChip.innerHTML = '';
+                return;
+            }
+            replyChip.classList.remove('hidden');
+            replyChip.innerHTML = `<span>回覆 <strong>${replyingTo.user}</strong>: ${replyingTo.text}</span><button type="button" id="clear-reply">取消</button>`;
+            document.getElementById('clear-reply').onclick = () => {
+                replyingTo = null;
+                buildReplyChip();
+            };
+        }
+
+        function getUrls(text) {
+            return (text.match(/https?:\/\/[^\s]+/g) || []).slice(0, 2);
+        }
+
+        const linkPreviewCache = new Map();
+        async function fetchLinkPreview(oneUrl) {
+            if (!oneUrl) return null;
+            if (linkPreviewCache.has(oneUrl)) return linkPreviewCache.get(oneUrl);
+            try {
+                const resp = await fetch(`/link-preview?url=${encodeURIComponent(oneUrl)}`);
+                const body = await resp.json();
+                linkPreviewCache.set(oneUrl, body);
+                return body;
+            } catch {
+                return null;
+            }
+        }
+
+        function renderTextWithLinks(text, currentUserName) {
+            const container = document.createElement('div');
+            const parts = (text || '').split(/(https?:\/\/[^\s]+)/g);
+            const mentionToken = `@${currentUserName}`;
+            parts.forEach(part => {
+                if (!part) return;
+                if (/^https?:\/\//i.test(part)) {
+                    const a = document.createElement('a');
+                    a.href = part;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    a.textContent = part;
+                    container.appendChild(a);
+                    return;
+                }
+
+                if (!mentionToken || !part.includes(mentionToken)) {
+                    container.appendChild(document.createTextNode(part));
+                } else {
+                    part.split(mentionToken).forEach((segment, idx, arr) => {
+                        if (segment) container.appendChild(document.createTextNode(segment));
+                        if (idx < arr.length - 1) {
+                            const m = document.createElement('span');
+                            m.className = 'mention';
+                            m.textContent = mentionToken;
+                            container.appendChild(m);
+                        }
+                    });
+                }
+            });
+            return container;
+        }
+
         function renderAttachment(attachment) {
             if (!attachment) return null;
 
@@ -326,10 +409,55 @@
                     gifEl.loading = 'lazy';
                     el.appendChild(gifEl);
                 } else {
+                    if (data.replyTo && data.replyTo.messageId) {
+                        const replyBox = document.createElement('div');
+                        replyBox.className = 'reply-box';
+                        const replyMeta = document.createElement('div');
+                        replyMeta.className = 'reply-meta';
+                        replyMeta.textContent = `回覆 ${data.replyTo.user || '某人'}`;
+                        const replyText = document.createElement('div');
+                        replyText.textContent = data.replyTo.text || '';
+                        replyBox.appendChild(replyMeta);
+                        replyBox.appendChild(replyText);
+                        el.appendChild(replyBox);
+                    }
+
                     if (data.text) {
-                        const contentEl = document.createElement('div');
-                        contentEl.innerText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
+                        const rawText = data.encrypted ? decodeMessage(data.text, roomKeyInput.value) : data.text;
+                        const contentEl = renderTextWithLinks(rawText, myNickname);
                         el.appendChild(contentEl);
+
+                        getUrls(rawText).forEach(async (oneUrl) => {
+                            const info = await fetchLinkPreview(oneUrl);
+                            if (!info) return;
+                            const card = document.createElement('a');
+                            card.href = oneUrl;
+                            card.target = '_blank';
+                            card.rel = 'noopener';
+                            card.className = 'link-preview';
+
+                            if (info.image) {
+                                const img = document.createElement('img');
+                                img.src = info.image;
+                                img.alt = 'preview';
+                                img.loading = 'lazy';
+                                card.appendChild(img);
+                            }
+
+                            const body = document.createElement('div');
+                            body.className = 'link-preview-body';
+                            const title = document.createElement('div');
+                            title.className = 'link-preview-title';
+                            title.textContent = info.title || oneUrl;
+                            const desc = document.createElement('div');
+                            desc.className = 'link-preview-desc';
+                            desc.textContent = info.description || info.host || '';
+                            body.appendChild(title);
+                            body.appendChild(desc);
+                            card.appendChild(body);
+
+                            el.appendChild(card);
+                        });
                     }
 
                     const attachmentEl = renderAttachment(data.attachment);
@@ -341,8 +469,9 @@
                     actions.className = 'msg-actions';
                     const delBtn = document.createElement('button');
                     delBtn.type = 'button';
-                    delBtn.className = 'tiny-btn';
-                    delBtn.textContent = '收回/刪除';
+                    delBtn.className = 'msg-delete-btn';
+                    delBtn.title = '收回/刪除';
+                    delBtn.textContent = '🗑';
                     delBtn.onclick = () => {
                         fetch('/message/delete', {
                             method: 'POST',
@@ -351,6 +480,24 @@
                         });
                     };
                     actions.appendChild(delBtn);
+                    el.appendChild(actions);
+                }
+
+                if (data.messageId) {
+                    const actions = document.createElement('div');
+                    actions.className = 'msg-actions';
+                    const replyBtn = document.createElement('button');
+                    replyBtn.type = 'button';
+                    replyBtn.className = 'msg-delete-btn';
+                    replyBtn.title = '回覆';
+                    replyBtn.textContent = '↩';
+                    replyBtn.onclick = () => {
+                        const plain = (data.encrypted ? decodeMessage(data.text || '', roomKeyInput.value) : (data.text || '')).slice(0, 80);
+                        replyingTo = { messageId: data.messageId, user: data.user || '某人', text: plain || '[附件/GIF]' };
+                        buildReplyChip();
+                        msgInput.focus();
+                    };
+                    actions.appendChild(replyBtn);
                     el.appendChild(actions);
                 }
 
@@ -556,7 +703,17 @@
             const data = JSON.parse(event.data);
 
             if (data.type === 'userList') {
-                userListDiv.innerHTML = data.users.map(u => `<div>● ${u}</div>`).join('');
+                onlineUsers = data.users || [];
+                userListDiv.innerHTML = onlineUsers.map(u => `<div class="user-item" data-user="${u}">● ${u}</div>`).join('');
+                userListDiv.querySelectorAll('.user-item').forEach(item => {
+                    item.onclick = () => {
+                        const name = item.dataset.user || '';
+                        if (!name) return;
+                        const prefix = msgInput.value && !msgInput.value.endsWith(' ') ? ' ' : '';
+                        msgInput.value += `${prefix}@${name} `;
+                        msgInput.focus();
+                    };
+                });
                 return;
             }
 
@@ -626,12 +783,15 @@
                     encrypted: payload.encrypted,
                     messageType: 'text',
                     userId: userId,
-                    attachment: pendingAttachment
+                    attachment: pendingAttachment,
+                    replyTo: replyingTo
                 })
             });
 
             msgInput.value = '';
             clearPendingAttachment();
+            replyingTo = null;
+            buildReplyChip();
             heartbeatOnActivity();
         };
 
@@ -642,6 +802,7 @@
         updateSecurityStatus();
         sendHeartbeat();
         loadGifs();
+        buildReplyChip();
     </script>
 </body>
 </html>

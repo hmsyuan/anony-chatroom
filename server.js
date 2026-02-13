@@ -6,13 +6,42 @@ const url = require('url');
 
 const PORT = process.env.PORT || 8080;
 const MAX_IPS = 8;
-const IDLE_TIMEOUT = 30 * 60 * 1000;
+const IDLE_TIMEOUT = 10 * 60 * 1000;
+const SSE_KEEPALIVE_MS = 25000;
 
 const clients = new Map();
 const messages = [];
 let nextMessageId = 1;
 const MAX_MESSAGE_HISTORY = 200;
 const MAX_ATTACHMENT_DATA_URL_LENGTH = 3 * 1024 * 1024;
+const LINK_PREVIEW_TIMEOUT_MS = 4000;
+
+const builtInGifPools = {
+  cats: [
+    { name: 'Cat typing', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
+    { name: 'Cat hi', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
+    { name: 'Happy cat', url: 'https://media.giphy.com/media/v6aOjy0Qo1fIA/giphy.gif' },
+    { name: 'Cat wow', url: 'https://media.giphy.com/media/ICOgUNjpvO0PC/giphy.gif' }
+  ],
+  memes: [
+    { name: 'Mind blown', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+    { name: 'Thumbs up', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+    { name: 'Nice', url: 'https://media.giphy.com/media/yJFeycRK2DB4c/giphy.gif' },
+    { name: 'Oh no', url: 'https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif' }
+  ],
+  reactions: [
+    { name: 'Clap', url: 'https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif' },
+    { name: 'LOL', url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
+    { name: 'Facepalm', url: 'https://media.giphy.com/media/TJawtKM6OCKkvwCIqX/giphy.gif' },
+    { name: 'Party', url: 'https://media.giphy.com/media/MeIucAjPKoA120R7sN/giphy.gif' }
+  ],
+  anime: [
+    { name: 'Anime wow', url: 'https://media.giphy.com/media/13borq7Zo2kulO/giphy.gif' },
+    { name: 'Nod', url: 'https://media.giphy.com/media/KzJkzjggfGN5Py6nkT/giphy.gif' },
+    { name: 'Wave', url: 'https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif' },
+    { name: 'Excited', url: 'https://media.giphy.com/media/1yldusVtwRA9r9EUan/giphy.gif' }
+  ]
+};
 
 const builtInGifPools = {
   cats: [
@@ -119,6 +148,41 @@ function fetchJson(targetUrl) {
   });
 }
 
+function fetchText(targetUrl) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(targetUrl, { timeout: LINK_PREVIEW_TIMEOUT_MS, headers: { 'User-Agent': 'anony-chatroom-link-preview' } }, (resp) => {
+      let data = '';
+      resp.on('data', chunk => {
+        data += chunk;
+        if (data.length > 250000) resp.destroy();
+      });
+      resp.on('end', () => resolve(data));
+    });
+
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+  });
+}
+
+function extractMeta(html, property, attrName = 'property') {
+  const regex = new RegExp(`<meta[^>]+${attrName}=["']${property}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i');
+  const m = html.match(regex);
+  return m ? m[1] : '';
+}
+
+function extractTitle(html) {
+  const ogTitle = extractMeta(html, 'og:title');
+  if (ogTitle) return ogTitle;
+  const m = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return m ? m[1].trim() : '';
+}
+
+function sanitizeUrl(rawUrl) {
+  const t = (rawUrl || '').toString().trim();
+  if (!/^https?:\/\//i.test(t)) return '';
+  return t.slice(0, 600);
+}
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = url.parse(req.url, true);
 
@@ -151,17 +215,27 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
+      Connection: 'keep-alive'
     });
 
     if (clients.has(userId)) {
-      clearTimeout(clients.get(userId).timer);
-      clients.get(userId).lastSeen = Date.now();
+      const old = clients.get(userId);
+      clearTimeout(old.timer);
+      clearInterval(old.keepAliveTimer);
+      old.lastSeen = Date.now();
     } else {
       broadcastSystem(`${nickname} 進入了聊天室。`);
     }
 
-    const clientData = { res, ip, nickname, lastSeen: Date.now() };
+    const keepAliveTimer = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(keepAliveTimer);
+      }
+    }, SSE_KEEPALIVE_MS);
+
+    const clientData = { res, ip, nickname, lastSeen: Date.now(), keepAliveTimer };
     clients.set(userId, clientData);
     broadcastUserList();
 
@@ -169,6 +243,7 @@ const server = http.createServer(async (req, res) => {
       const timer = setTimeout(() => {
         if (clients.get(userId)?.res === res) {
           const currentNickname = clients.get(userId)?.nickname || nickname;
+          clearInterval(clients.get(userId)?.keepAliveTimer);
           clients.delete(userId);
           broadcastSystem(`${currentNickname} 離開了聊天室。`);
           broadcastUserList();
@@ -210,6 +285,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (parsedUrl.pathname === '/link-preview' && req.method === 'GET') {
+    const targetUrl = sanitizeUrl(parsedUrl.query.url);
+    if (!targetUrl) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'invalid url' }));
+      return;
+    }
+
+    try {
+      const html = await fetchText(targetUrl);
+      const pageTitle = extractTitle(html);
+      const description = extractMeta(html, 'og:description') || extractMeta(html, 'description', 'name');
+      const image = extractMeta(html, 'og:image');
+      const host = new URL(targetUrl).host;
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        url: targetUrl,
+        title: pageTitle || host,
+        description: (description || '').slice(0, 220),
+        image: image || '',
+        host
+      }));
+    } catch {
+      const host = (() => {
+        try { return new URL(targetUrl).host; } catch { return ''; }
+      })();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ url: targetUrl, title: host || targetUrl, description: '', image: '', host }));
+    }
+    return;
+  }
+
   if (parsedUrl.pathname === '/chat' && req.method === 'POST') {
     readBody(req, data => {
       const client = clients.get(data.userId);
@@ -223,6 +331,11 @@ const server = http.createServer(async (req, res) => {
         const isValidGifUrl = messageType === 'gif' && /^https:\/\/.+/i.test(gifUrl);
         const hasValidText = messageType === 'text' && text.trim();
         const hasAttachment = messageType === 'text' && Boolean(attachment);
+        const replyTo = data.replyTo && typeof data.replyTo === 'object' ? {
+          messageId: (data.replyTo.messageId || '').toString().slice(0, 40),
+          user: (data.replyTo.user || '').toString().slice(0, 40),
+          text: (data.replyTo.text || '').toString().slice(0, 160)
+        } : null;
 
         if (hasValidText || isValidGifUrl || hasAttachment) {
           const messageId = `m_${nextMessageId++}`;
@@ -239,6 +352,7 @@ const server = http.createServer(async (req, res) => {
             userId: data.userId,
             encrypted: messageType === 'text' ? Boolean(data.encrypted) : false,
             attachment: messageType === 'text' ? attachment : null,
+            replyTo,
             createdAt: new Date().toISOString()
           });
         }
@@ -313,9 +427,10 @@ setInterval(() => {
   const now = Date.now();
   clients.forEach((client, userId) => {
     if (now - client.lastSeen > IDLE_TIMEOUT) {
+      clearInterval(client.keepAliveTimer);
       client.res.end();
       clients.delete(userId);
-      broadcastSystem(`${client.nickname} 因閒置過久被移出。`);
+      broadcastSystem(`${client.nickname} 因閒置超過 10 分鐘被移出。`);
       broadcastUserList();
     }
   });
